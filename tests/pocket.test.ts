@@ -6,6 +6,7 @@ import { buttonFor, expandPath, fit, toCells, unpack, HEIGHT, SHADES, WIDTH } fr
 const HOME = '/home/test'
 const GAME = `${HOME}/Games/demo.gb`
 const SOCKET = '/tmp/pocket-test/s'
+const WEB = 'http://127.0.0.1:4567/?t=secret'
 
 const PANE = {
   plugin: 'pocket',
@@ -38,6 +39,7 @@ function fakeHost(on: On, env: Record<string, string> = { HOME, TERM: 'xterm-256
   const blits: Record<string, unknown>[] = []
   const spawned: string[][] = []
   const opened: Record<string, unknown>[] = []
+  const copied: string[] = []
   let isRunning = true
   let isImageDrawn = false
   const release = () => {
@@ -52,7 +54,7 @@ function fakeHost(on: On, env: Record<string, string> = { HOME, TERM: 'xterm-256
     spawned.push([...e.argv])
     yield {
       stream: 'stdout' as const,
-      text: `${JSON.stringify({ ready: true, socket: SOCKET, title: 'DEMO', width: 160, height: 144 })}\n`,
+      text: `${JSON.stringify({ ready: true, socket: SOCKET, web: WEB, title: 'DEMO', width: 160, height: 144 })}\n`,
     }
     yield { stream: 'stdout' as const, text: `${JSON.stringify({ frame: 1, ...frame })}\n` }
     // Idle on the mocked clock, as a stream with nothing new does: the kit's
@@ -73,6 +75,10 @@ function fakeHost(on: On, env: Record<string, string> = { HOME, TERM: 'xterm-256
   })
   on('ui.toast', () => ({ value: undefined }))
   on('ui.log', () => ({ value: undefined }))
+  on('ui.copy', ($, e) => {
+    copied.push(e.text)
+    return { value: { isCopied: true as const } }
+  })
   on('turn.complete', () => ({ text: 'done' }))
   on('ui.blit', ($, e) => {
     blits.push({ ...e })
@@ -83,7 +89,7 @@ function fakeHost(on: On, env: Record<string, string> = { HOME, TERM: 'xterm-256
   const drawImage = () => {
     isImageDrawn = true
   }
-  return { posts, blits, spawned, opened, clock, release, drawImage }
+  return { posts, blits, spawned, opened, copied, clock, release, drawImage }
 }
 
 const command = (args: string) => ({
@@ -140,8 +146,11 @@ describe('the mod', () => {
     const screen = await ui.find({ key: 'screen' })
     expect(screen?.type).toBe('Raster')
     expect(screen?.props.columns).toBe(80)
-    expect(await ui.find({ type: 'Text', text: /Half size/ })).toBeDefined()
-    expect(await ui.find({ type: 'Text', text: /190×73/ })).toBeDefined()
+    // This terminal draws blocks: the sharp screen opened, and the pane offers it.
+    expect(host.posts.some(post => post.path === '/open')).toBe(true)
+    expect(await ui.find({ type: 'Text', text: /sharp screen/ })).toBeDefined()
+    await ui.press({ key: 'copy' })
+    expect(host.copied).toEqual([WEB])
 
     // The frame that arrived before the pane drew is painted by blit.
     expect(host.blits.length).toBeGreaterThan(0)
@@ -177,7 +186,6 @@ describe('the mod', () => {
     const screen = await ui.find({ key: 'screen' })
     expect([screen?.props.columns, screen?.props.rows]).toEqual([160, 72])
     expect(await ui.find({ key: 'fit' })).toBeDefined()
-    expect(await ui.find({ type: 'Text', text: /Full\s+size needs/ })).toBeUndefined()
     host.release()
     await host.clock.advance(1000)
     await ui.unmount()
@@ -205,6 +213,8 @@ describe('the mod', () => {
     await $.command.run(command(GAME))
     await host.clock.settle()
     expect(host.posts.some(post => post.path === '/mode' && (post.body as { image: boolean }).image)).toBe(true)
+    // Sharp pixels here: no browser window opens by itself.
+    expect(host.posts.some(post => post.path === '/open')).toBe(false)
 
     // A refusal while the screen is not yet a picture keeps sharp pixels.
     const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })

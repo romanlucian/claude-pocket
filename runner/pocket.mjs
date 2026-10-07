@@ -6,18 +6,22 @@
 //   `{"frame":…}` per picture (the 160x144 shades packed 4 per byte, base64;
 //   in image mode the RGB file the terminal should read instead);
 // - a tiny HTTP server on a Unix socket in a private temp folder, for keys
-//   (`POST /keys`), pause (`POST /pause`, `POST /resume`) and the drawing
-//   mode (`POST /mode`).
+//   (`POST /keys`), pause (`POST /pause`, `POST /resume`), the drawing
+//   mode (`POST /mode`) and opening the sharp screen (`POST /open`);
+// - the sharp screen, a web page on 127.0.0.1 (web.mjs): its address is in
+//   the ready line, and a pause from it is a `{"paused":…}` line.
 //
 // A terminal reports key presses but not releases, so a press holds the
 // button for a moment and each repeat of a held key extends the hold.
 
+import { spawn } from 'node:child_process'
 import { mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 import { Machine, SHADES, WIDTH, HEIGHT } from '../core/machine.mjs'
+import { startWeb } from './web.mjs'
 
 const FRAME_MS = 1000 / 59.7275
 const FIRST_HOLD_MS = Number(process.env.POCKET_FIRST_HOLD_MS ?? 420)
@@ -46,6 +50,8 @@ let imageMode = false
 let imageSlot = 0
 let generation = 0
 const heldUntil = new Map()
+// Buttons the sharp screen holds down: a browser reports the release.
+const webDown = new Set()
 
 const cleanUp = () => {
   try {
@@ -64,16 +70,56 @@ function press(button, now) {
 function updateButtons(now) {
   for (const [button, until] of heldUntil) {
     const isDown = until > now
-    machine.setButton(button, isDown)
+    machine.setButton(button, isDown || webDown.has(button))
     if (!isDown) heldUntil.delete(button)
+  }
+}
+
+function setPaused(next) {
+  if (next === isPaused) return
+  isPaused = next
+  web.status({ isPaused })
+  send({ paused: isPaused })
+}
+
+const web = await startWeb({
+  title: machine.title,
+  onButton: (button, isDown) => {
+    if (isDown) webDown.add(button)
+    else webDown.delete(button)
+    const until = heldUntil.get(button)
+    machine.setButton(button, isDown || (until !== undefined && until > performance.now()))
+  },
+  onPause: () => setPaused(!isPaused),
+})
+
+// Opens the sharp screen in the default browser.
+function openPage() {
+  const [command, ...args] =
+    process.platform === 'darwin' ? ['open', web.url] : process.platform === 'win32' ? ['cmd', '/c', 'start', '', web.url] : ['xdg-open', web.url]
+  try {
+    spawn(command, args, { stdio: 'ignore', detached: true }).on('error', () => {}).unref()
+  } catch {
+    // no browser to open: the address is in the pane
   }
 }
 
 const packed = new Uint8Array((WIDTH * HEIGHT) / 4)
 const rgb = new Uint8Array(WIDTH * HEIGHT * 3)
 
+function pack(frame) {
+  for (let i = 0; i < packed.length; i++) {
+    const p = i * 4
+    packed[i] = frame[p] | (frame[p + 1] << 2) | (frame[p + 2] << 4) | (frame[p + 3] << 6)
+  }
+}
+
 function emit(frame) {
   generation++
+  if (web.hasViewers()) {
+    pack(frame)
+    web.frame(packed)
+  }
   if (imageMode) {
     for (let i = 0; i < frame.length; i++) {
       const color = SHADES[frame[i]]
@@ -90,10 +136,7 @@ function emit(frame) {
     send({ frame: generation, file })
     return
   }
-  for (let i = 0; i < packed.length; i++) {
-    const p = i * 4
-    packed[i] = frame[p] | (frame[p + 1] << 2) | (frame[p + 2] << 4) | (frame[p + 3] << 6)
-  }
+  pack(frame)
   send({ frame: generation, px: Buffer.from(packed).toString('base64') })
 }
 
@@ -111,9 +154,11 @@ const server = createServer((request, response) => {
       const now = performance.now()
       for (const button of data.keys) if (typeof button === 'string') press(button, now)
     } else if (request.url === '/pause') {
-      isPaused = true
+      setPaused(true)
     } else if (request.url === '/resume') {
-      isPaused = false
+      setPaused(false)
+    } else if (request.url === '/open') {
+      openPage()
     } else if (request.url === '/mode') {
       imageMode = data.image === true
     }
@@ -121,7 +166,7 @@ const server = createServer((request, response) => {
   })
 })
 
-server.listen(socket, () => send({ ready: true, socket, title: machine.title, width: WIDTH, height: HEIGHT }))
+server.listen(socket, () => send({ ready: true, socket, web: web.url, title: machine.title, width: WIDTH, height: HEIGHT }))
 
 // Real time: run as many frames as the clock says are due (at most a few,
 // so a stall does not fast-forward), and send only the newest picture.
@@ -147,6 +192,7 @@ loop()
 
 const stop = () => {
   server.close()
+  web.close()
   cleanUp()
   process.exit(0)
 }

@@ -24,6 +24,7 @@ const game = atom({ plugin: 'pocket', key: 'game' } as const, {
   romPath: '',
   message: '',
   firstFile: '',
+  webUrl: '',
 })
 const mode = atom({ plugin: 'pocket', key: 'mode' } as const, 'cells')
 const pauseWhenDone = atom({ plugin: 'pocket', key: 'pauseWhenDone' } as const, true)
@@ -74,7 +75,7 @@ async function stopGame($: Engine, message = 'Stopped.'): Promise<void> {
   const current = runner
   runner = undefined
   current?.stop()
-  await update($, game, value => (value.status === 'idle' ? value : { ...value, status: 'idle' as const, message, firstFile: '' }))
+  await update($, game, value => (value.status === 'idle' ? value : { ...value, status: 'idle' as const, message, firstFile: '', webUrl: '' }))
 }
 
 async function setPaused($: Engine, isPaused: boolean, message: string): Promise<void> {
@@ -141,7 +142,7 @@ async function setMode($: Engine, drawing: 'pixels' | 'cells'): Promise<void> {
 
 async function startGame($: Engine, romPath: string): Promise<void> {
   await stopGame($)
-  await setGame($, { status: 'starting', title: '', romPath, message: 'Starting the console…', firstFile: '' })
+  await setGame($, { status: 'starting', title: '', romPath, message: 'Starting the console…', firstFile: '', webUrl: '' })
   const stream = $.process.spawn({ argv: [node, `${$.plugin.root}/runner/pocket.mjs`, romPath] })
   const mine: Runner = {
     stop: () => void stream.return({ code: null, signal: 'SIGTERM' }),
@@ -183,8 +184,21 @@ async function pump(
         if (message.ready === true && typeof message.socket === 'string') {
           mine.socket = message.socket
           const title = typeof message.title === 'string' && message.title !== '' ? message.title : 'Game'
-          if ((await read($, mode)) === 'pixels') await control($, '/mode', { image: true })
-          await setGame($, { status: 'running', title, message: '' })
+          const webUrl = typeof message.web === 'string' ? message.web : ''
+          const drawing = await read($, mode)
+          if (drawing === 'pixels') await control($, '/mode', { image: true })
+          await setGame($, { status: 'running', title, message: '', webUrl })
+          // No real pixels in this terminal: open the sharp screen too.
+          if (drawing === 'cells' && webUrl !== '') await control($, '/open')
+        }
+        if (typeof message.paused === 'boolean') {
+          // The sharp screen's P key paused or resumed the game.
+          const isPaused = message.paused
+          await update($, game, value =>
+            value.status === 'running' || value.status === 'paused'
+              ? { ...value, status: isPaused ? ('paused' as const) : ('running' as const), message: '' }
+              : value,
+          )
         }
         if (typeof message.frame === 'number') {
           mine.generation = message.frame
@@ -205,7 +219,7 @@ async function pump(
   runner = undefined
   const why = failure ?? (errors.trim().split('\n').pop() || 'The console stopped.')
   try {
-    await setGame($, { status: 'error', message: why, firstFile: '' })
+    await setGame($, { status: 'error', message: why, firstFile: '', webUrl: '' })
   } catch {
     // The session or the mod is gone: nothing left to tell.
   }
@@ -391,6 +405,12 @@ export const register: Register = (on, options) => {
         )}
         {isPlaying && <Button key="stop" label="Stop" onPress={() => void stopGame($)} />}
         {isPlaying && drawing === 'cells' && <Button key="fit" label="Fit" onPress={() => $.ui.invalidate('ui.render')} />}
+        {isPlaying && current.webUrl !== '' && (
+          <Button key="open" label="Open sharp screen" onPress={() => void control($, '/open')} />
+        )}
+        {isPlaying && current.webUrl !== '' && (
+          <Button key="copy" label="Copy link" onPress={press => void $.ui.copy({ text: current.webUrl, surface: press.surface })} />
+        )}
         {isPlaying && (
           <Button
             key="picture"
@@ -408,11 +428,10 @@ export const register: Register = (on, options) => {
     const notes = (
       <Box flexDirection="column">
         {current.message !== '' && <Text dimColor>{current.message}</Text>}
-        {isSmall && (
-          <Text color="warning">
-            {cellsBox.columns === WIDTH / 2 ? 'Half size: the letters break up.' : 'Too small for a clear picture.'} Full
-            size needs the pane {WIDTH + SIDE_COLUMNS}×{FULL_ROWS + 1} (now {columns}×{bodyRows}): a smaller terminal font
-            or a bigger pane, then Fit.
+        {isPlaying && drawing === 'cells' && current.webUrl !== '' && (
+          <Text color={isSmall ? 'warning' : undefined} dimColor={!isSmall}>
+            This terminal draws blocks, not pixels. For the sharp picture, play in the sharp screen: Open sharp screen
+            (your browser), or Copy link and in VS Code run Simple Browser: Show and paste it.
           </Text>
         )}
         {!isPlaying && current.romPath === '' && (

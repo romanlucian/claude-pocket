@@ -45,26 +45,18 @@ last game; `/pocket stop` stops it.
 
 ## Which terminal
 
-- **Ghostty or kitty:** the screen is drawn with real pixels (sharp), and the
-  title line says *sharp pixels*. The **Picture** button switches between
-  sharp pixels and cells; the choice is kept. If sharp pixels don't work, the
-  pane says why and uses cells.
-- **VS Code's terminal and others:** the screen is drawn with half-block
-  characters, one game pixel per half character. The game is 160×144 pixels,
-  and its letters are only readable at full size: the pane must be about
-  **190 columns × 73 rows** (the buttons then sit beside the screen). Smaller
-  panes get half size, where the letters break up.
+- **Ghostty or kitty:** the game is drawn with real pixels right in the pane,
+  and the title line says *sharp pixels*. The **Picture** button switches
+  between sharp pixels and cells; the choice is kept.
+- **VS Code's terminal and others:** a terminal like this can only draw
+  blocks of text, so Pocket also opens the **sharp screen**: the game in a
+  browser window, drawn with crisp pixels at any size. To keep it inside VS
+  Code, press **Copy link** in the pane, then run **Simple Browser: Show**
+  (Cmd/Ctrl+Shift+P) and paste it. **Open sharp screen** opens it again.
 
-  In VS Code, maximize the terminal panel and make its font small, in
-  Settings (JSON):
-
-  ```json
-  "terminal.integrated.fontSize": 10,
-  "terminal.integrated.lineHeight": 1
-  ```
-
-  Then press **Fit** in the pane. The warning under the buttons shows the
-  pane's size now and the size it needs.
+The sharp screen is a page on your own computer only (127.0.0.1, with a
+secret address). Its keys are the same, except Select is **Shift**; a browser
+knows when you let go of a key, so the controls there feel exactly right.
 
 ## What works, what doesn't
 
@@ -73,9 +65,9 @@ last game; `/pocket stop` stops it.
   `dmg-acid2` reference picture.
 - **No sound.**
 - **No save files** yet (battery saves are lost when you stop).
-- Terminals only report key presses, not releases, so a key is held for a short
-  moment after each press (holding a key repeats it). Fine for most games;
-  precise jumps take some getting used to.
+- In the terminal pane, keys are presses only (a terminal reports no
+  releases), so a key is held for a short moment after each press. The sharp
+  screen has real key releases.
 - Game Boy Color games are not supported.
 
 ## How it works
@@ -85,6 +77,8 @@ last game; `/pocket stop` stops it.
   dependencies.
 - `runner/pocket.mjs` — runs the emulator in real time (~60 fps) in a Node
   process, streams frames on stdout and takes keys over a local socket.
+- `runner/web.mjs` — the sharp screen: a page on 127.0.0.1 drawing frames on
+  a canvas.
 - `hooks/` — the mod: the `/pocket` command, the pane, the key pad, and the
   auto-pause when Claude finishes a turn.
 

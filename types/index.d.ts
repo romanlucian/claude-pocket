@@ -6,6 +6,8 @@ export type PocketGame = {
   message: string
   /** The picture file the terminal reads (pixels mode), once the first frame exists. */
   firstFile: string
+  /** The sharp screen's address (a page on 127.0.0.1), once the console is up. */
+  webUrl: string
 }
 
 declare module 'claude-code' {

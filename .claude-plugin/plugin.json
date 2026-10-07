@@ -1,6 +1,6 @@
 {
   "name": "pocket",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "A handheld game console in a Claude Code pane: plays your own Game Boy game files",
   "author": {
     "name": "Lucian Roman"
