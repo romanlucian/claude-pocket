@@ -44,21 +44,32 @@ export function fit(mode: 'cells' | 'pixels', columns: number, rows: number): Fi
 
 /**
  * The picture as `Raster` cells, base64: upper half blocks whose foreground
- * is the upper pixel and background the lower, scaled to the box.
+ * is the upper pixel and background the lower, scaled to the box. Each half
+ * cell takes the average shade of the pixels it covers, so a small picture
+ * keeps thin things (a sprite, a line) instead of dropping them.
  */
 export function toCells(shades: Uint8Array, box: Fit): string {
   const { columns, rows } = box
   const words = new Uint32Array(columns * rows * 3)
   const pixelRows = rows * 2
+  // The source span of each output column and half row.
+  const xFrom = Array.from({ length: columns + 1 }, (_, i) => Math.floor((i * WIDTH) / columns))
+  const yFrom = Array.from({ length: pixelRows + 1 }, (_, i) => Math.floor((i * HEIGHT) / pixelRows))
+  const shadeAt = (cx: number, py: number): number => {
+    const x0 = xFrom[cx] ?? 0
+    const x1 = Math.max(x0 + 1, xFrom[cx + 1] ?? WIDTH)
+    const y0 = Math.min(HEIGHT - 1, yFrom[py] ?? 0)
+    const y1 = Math.min(HEIGHT, Math.max(y0 + 1, yFrom[py + 1] ?? HEIGHT))
+    let sum = 0
+    for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) sum += shades[y * WIDTH + x] ?? 0
+    return SHADES[Math.round(sum / ((x1 - x0) * (y1 - y0)))] ?? 0
+  }
   for (let cy = 0; cy < rows; cy++) {
-    const top = Math.min(HEIGHT - 1, Math.floor(((cy * 2) * HEIGHT) / pixelRows))
-    const bottom = Math.min(HEIGHT - 1, Math.floor(((cy * 2 + 1) * HEIGHT) / pixelRows))
     for (let cx = 0; cx < columns; cx++) {
-      const x = Math.min(WIDTH - 1, Math.floor((cx * WIDTH) / columns))
       const o = (cy * columns + cx) * 3
       words[o] = UPPER_HALF_BLOCK
-      words[o + 1] = SHADES[shades[top * WIDTH + x] ?? 0] ?? 0
-      words[o + 2] = SHADES[shades[bottom * WIDTH + x] ?? 0] ?? 0
+      words[o + 1] = shadeAt(cx, cy * 2)
+      words[o + 2] = shadeAt(cx, cy * 2 + 1)
     }
   }
   return new Uint8Array(words.buffer).toBase64()

@@ -10,6 +10,10 @@ type Engine = EngineInterface
 const PANE = 'pocket'
 // Rows the pane keeps for everything but the screen: title, pad, buttons, message.
 const CHROME_ROWS = 6
+// Rows of cells the whole picture takes, two pixels to a cell.
+const FULL_ROWS = HEIGHT / 2
+// Below this width the picture is too small to play well: say how to grow it.
+const SMALL_COLUMNS = 80
 // Cells mode encodes every picture in this module: at most this many a second.
 const CELLS_FPS = 30
 
@@ -211,7 +215,9 @@ async function sendKeys($: Engine, data: unknown): Promise<void> {
 }
 
 async function openPane($: Engine): Promise<void> {
-  await $.ui.open({ id: PANE, title: 'Pocket' })
+  // Ask for room for the full picture: 160 columns by 72 rows of cells (two
+  // pixels a cell), plus the pane's own lines. The surface gives what it can.
+  await $.ui.open({ id: PANE, title: 'Pocket', rows: FULL_ROWS + CHROME_ROWS, columns: WIDTH + 2 })
 }
 
 async function remember($: Engine, romPath: string): Promise<void> {
@@ -355,6 +361,9 @@ export const register: Register = (on, options) => {
             <Button key="restart" label={isPlaying ? 'Restart' : 'Play again'} onPress={() => void startGame($, current.romPath)} />
           )}
           {isPlaying && <Button key="stop" label="Stop" onPress={() => void stopGame($)} />}
+          {isPlaying && drawing === 'cells' && (
+            <Button key="fit" label="Fit" onPress={() => $.ui.invalidate('ui.render')} />
+          )}
           <Button
             key="auto-pause"
             label={isPausing ? 'Pause when Claude finishes: on' : 'Pause when Claude finishes: off'}
@@ -362,6 +371,11 @@ export const register: Register = (on, options) => {
           />
         </Box>
         {current.message !== '' && <Text dimColor>{current.message}</Text>}
+        {isPlaying && drawing === 'cells' && cellsBox.columns < SMALL_COLUMNS && (
+          <Text color="warning">
+            The pane is small for a clear picture: drag it taller (or make the font smaller, Cmd/Ctrl −), then press Fit.
+          </Text>
+        )}
         {!isPlaying && current.romPath === '' && (
           <Text dimColor>Type /pocket and the path of your own game file, for example /pocket ~/Games/my-game.gb</Text>
         )}

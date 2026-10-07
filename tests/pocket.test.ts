@@ -37,6 +37,7 @@ function fakeHost(on: On, env: Record<string, string> = { HOME, TERM: 'xterm-256
   const posts: { path: string; body: unknown }[] = []
   const blits: Record<string, unknown>[] = []
   const spawned: string[][] = []
+  const opened: Record<string, unknown>[] = []
   let isRunning = true
   const release = () => {
     isRunning = false
@@ -65,7 +66,10 @@ function fakeHost(on: On, env: Record<string, string> = { HOME, TERM: 'xterm-256
   on('fs.exists', ($, e) => ({ value: e.path === GAME }))
   on('session.start', ($, e) => ({ cwd: e.cwd }))
   on('command.register', ($, e) => ({ value: { command: e.name } }))
-  on('ui.open', () => ({ value: { isPlaced: true as const } }))
+  on('ui.open', ($, e) => {
+    opened.push({ ...e })
+    return { value: { isPlaced: true as const } }
+  })
   on('ui.toast', () => ({ value: undefined }))
   on('ui.log', () => ({ value: undefined }))
   on('turn.complete', () => ({ text: 'done' }))
@@ -73,7 +77,7 @@ function fakeHost(on: On, env: Record<string, string> = { HOME, TERM: 'xterm-256
     blits.push({ ...e })
     return { value: {} }
   })
-  return { posts, blits, spawned, clock, release }
+  return { posts, blits, spawned, opened, clock, release }
 }
 
 const command = (args: string) => ({
@@ -120,6 +124,8 @@ describe('the mod', () => {
     const answer = await $.command.run(command('~/Games/demo.gb'))
     expect(answer.text).toContain('Starting')
     await host.clock.settle()
+    // The pane asks for room for the whole picture: 72 rows of cells and its own lines.
+    expect(host.opened[0]).toMatchObject({ id: 'pocket', rows: 78 })
     expect(host.spawned[0]?.slice(-2)).toEqual([expect.stringMatching(/runner\/pocket\.mjs$/), GAME])
 
     const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
@@ -127,6 +133,7 @@ describe('the mod', () => {
     const screen = await ui.find({ key: 'screen' })
     expect(screen?.type).toBe('Raster')
     expect(screen?.props.columns).toBe(120)
+    expect(await ui.find({ type: 'Text', text: /too small|small for a clear/ })).toBeUndefined()
 
     // The frame that arrived before the pane drew is painted by blit.
     expect(host.blits.length).toBeGreaterThan(0)
