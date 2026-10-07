@@ -1,7 +1,13 @@
 # pocket — a handheld game console inside Claude Code
 
-A Claude Code mod that runs a small Game Boy (DMG) emulator in a pane, so you can
-play while Claude works. When Claude finishes a turn, the game pauses for you.
+![pocket: a handheld game console inside Claude Code](docs/poster.png)
+
+A Claude Code mod that runs a small Game Boy (DMG) emulator, so you can play
+while Claude works: in the Claude Code pane (Ghostty, kitty) or in its own
+window (VS Code and the rest). When Claude finishes a turn, the game pauses
+for you.
+
+![How it works: type /pocket, play while Claude works, Claude is done and the game pauses](docs/how-it-works.png)
 
 ```
 /pocket ~/Games/my-game.gb
