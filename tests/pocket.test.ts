@@ -135,6 +135,7 @@ describe('the mod', () => {
     expect(screen?.type).toBe('Raster')
     expect(screen?.props.columns).toBe(80)
     expect(await ui.find({ type: 'Text', text: /Half size/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /190×73/ })).toBeDefined()
 
     // The frame that arrived before the pane drew is painted by blit.
     expect(host.blits.length).toBeGreaterThan(0)
@@ -157,6 +158,22 @@ describe('the mod', () => {
     expect(await ui.find({ type: 'Text', text: 'The console stopped.' })).toBeDefined()
     expect(await ui.find({ key: 'screen' })).toBeUndefined()
     expect(await ui.find({ key: 'restart' })).toBeDefined()
+    await ui.unmount()
+  })
+
+  test('puts the buttons beside the screen when that makes it full size', { timeoutMs: 20000 }, async ($, on) => {
+    const host = fakeHost(on)
+    await $.session.start(start)
+    await $.command.run(command(GAME))
+    await host.clock.settle()
+    const props = { ...PANE.props, bodyColumns: 190, scroll: { offset: 0, bodyRows: 73 } }
+    const ui = await $.ui.mount({ ...PANE, props, surface: 'terminal' })
+    const screen = await ui.find({ key: 'screen' })
+    expect([screen?.props.columns, screen?.props.rows]).toEqual([160, 72])
+    expect(await ui.find({ key: 'fit' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /Full\s+size needs/ })).toBeUndefined()
+    host.release()
+    await host.clock.advance(1000)
     await ui.unmount()
   })
 

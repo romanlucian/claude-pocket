@@ -47,11 +47,21 @@ last game; `/pocket stop` stops it.
 
 - **Ghostty or kitty:** the screen is drawn with real pixels (sharp).
 - **VS Code's terminal and others:** the screen is drawn with half-block
-  characters, two pixels per cell. The game is 160×144 pixels, so the sharp
-  picture needs the pane to be 160 columns by 78 rows; otherwise it is drawn at
-  exactly half size (80×36), never an in-between size that breaks up the letters. Give the terminal room: drag the
-  terminal panel taller (or maximize it), and make the font smaller
-  (Cmd/Ctrl −) for a sharper picture. After resizing, press **Fit** in the pane.
+  characters, one game pixel per half character. The game is 160×144 pixels,
+  and its letters are only readable at full size: the pane must be about
+  **190 columns × 73 rows** (the buttons then sit beside the screen). Smaller
+  panes get half size, where the letters break up.
+
+  In VS Code, maximize the terminal panel and make its font small, in
+  Settings (JSON):
+
+  ```json
+  "terminal.integrated.fontSize": 10,
+  "terminal.integrated.lineHeight": 1
+  ```
+
+  Then press **Fit** in the pane. The warning under the buttons shows the
+  pane's size now and the size it needs.
 
 ## What works, what doesn't
 

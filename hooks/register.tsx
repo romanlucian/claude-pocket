@@ -12,6 +12,9 @@ const PANE = 'pocket'
 const CHROME_ROWS = 6
 // Rows of cells the whole picture takes, two pixels to a cell.
 const FULL_ROWS = HEIGHT / 2
+// Columns for the title and buttons when they stand beside the screen, which
+// leaves the screen every row but the pad's.
+const SIDE_COLUMNS = 30
 // Cells mode encodes every picture in this module: at most this many a second.
 const CELLS_FPS = 30
 
@@ -304,8 +307,13 @@ export const register: Register = (on, options) => {
     const drawing = await read($, mode)
     const isPausing = await read($, pauseWhenDone)
     const isPlaying = current.status === 'running' || current.status === 'paused'
-    const freeRows = Math.max(10, e.props.scroll.bodyRows - CHROME_ROWS)
+    const bodyRows = e.props.scroll.bodyRows
+    const freeRows = Math.max(10, bodyRows - CHROME_ROWS)
     const columns = Math.max(16, e.props.bodyColumns)
+    // Cells: put the controls beside the screen when that gives a bigger one.
+    const stacked = fit('cells', columns, freeRows)
+    const beside = fit('cells', columns - SIDE_COLUMNS, Math.max(10, bodyRows - 1))
+    const isBeside = drawing === 'cells' && beside.columns > stacked.columns
 
     let screen
     if (!isPlaying) {
@@ -322,7 +330,7 @@ export const register: Register = (on, options) => {
         />
       )
     } else if (Raster !== undefined) {
-      cellsBox = fit('cells', columns, freeRows)
+      cellsBox = isBeside ? beside : stacked
       screen = <Raster key="screen" columns={cellsBox.columns} rows={cellsBox.rows} cells={toCells(latestShades, cellsBox)} />
     } else {
       screen = <Text dimColor>The screen shows in a terminal: run Claude Code in Ghostty, kitty or VS Code's terminal.</Text>
@@ -337,48 +345,75 @@ export const register: Register = (on, options) => {
             ? 'The console stopped.'
             : `${current.title}${current.status === 'paused' ? ' · paused' : ''}`
 
-    return (
-      <Box flexDirection="column">
-        <Box gap={1}>
-          <Text bold>{statusLine}</Text>
-          {isPlaying && <Text dimColor>{drawing === 'pixels' ? 'sharp pixels' : 'cell pixels'}</Text>}
-        </Box>
-        {screen}
-        {isPlaying && Client !== undefined && (
-          <Client key="pad" module="./pad.tsx" props={{ isPaused: current.status === 'paused' }} height={1} />
-        )}
-        <Box gap={1} flexWrap="wrap">
-          {isPlaying && (
-            <Button
-              key="pause"
-              label={current.status === 'paused' ? 'Resume' : 'Pause'}
-              onPress={() => void setPaused($, current.status !== 'paused', '')}
-            />
-          )}
-          {current.romPath !== '' && (
-            <Button key="restart" label={isPlaying ? 'Restart' : 'Play again'} onPress={() => void startGame($, current.romPath)} />
-          )}
-          {isPlaying && <Button key="stop" label="Stop" onPress={() => void stopGame($)} />}
-          {isPlaying && drawing === 'cells' && (
-            <Button key="fit" label="Fit" onPress={() => $.ui.invalidate('ui.render')} />
-          )}
+    const isSmall = isPlaying && drawing === 'cells' && cellsBox.columns < WIDTH
+    const header = (
+      <Box gap={1} flexWrap="wrap">
+        <Text bold>{statusLine}</Text>
+        {isPlaying && <Text dimColor>{drawing === 'pixels' ? 'sharp pixels' : 'cell pixels'}</Text>}
+      </Box>
+    )
+    const buttons = (
+      <Box gap={isBeside ? 0 : 1} flexWrap="wrap" flexDirection={isBeside ? 'column' : 'row'}>
+        {isPlaying && (
           <Button
-            key="auto-pause"
-            label={isPausing ? 'Pause when Claude finishes: on' : 'Pause when Claude finishes: off'}
-            onPress={() => void update($, pauseWhenDone, value => !value)}
+            key="pause"
+            label={current.status === 'paused' ? 'Resume' : 'Pause'}
+            onPress={() => void setPaused($, current.status !== 'paused', '')}
           />
-        </Box>
+        )}
+        {current.romPath !== '' && (
+          <Button key="restart" label={isPlaying ? 'Restart' : 'Play again'} onPress={() => void startGame($, current.romPath)} />
+        )}
+        {isPlaying && <Button key="stop" label="Stop" onPress={() => void stopGame($)} />}
+        {isPlaying && drawing === 'cells' && <Button key="fit" label="Fit" onPress={() => $.ui.invalidate('ui.render')} />}
+        <Button
+          key="auto-pause"
+          label={isPausing ? 'Pause when Claude finishes: on' : 'Pause when Claude finishes: off'}
+          onPress={() => void update($, pauseWhenDone, value => !value)}
+        />
+      </Box>
+    )
+    const notes = (
+      <Box flexDirection="column">
         {current.message !== '' && <Text dimColor>{current.message}</Text>}
-        {isPlaying && drawing === 'cells' && cellsBox.columns < WIDTH && (
-          <Text color={cellsBox.columns < WIDTH / 2 ? 'warning' : undefined} dimColor={cellsBox.columns >= WIDTH / 2}>
-            {cellsBox.columns === WIDTH / 2 ? 'Half size.' : 'The pane is small for a clear picture.'} Sharp full size needs{' '}
-            {WIDTH}×{FULL_ROWS + CHROME_ROWS} (the pane is {columns}×{e.props.scroll.bodyRows}): widen the pane or
-            make the font smaller (Cmd/Ctrl −), then press Fit.
+        {isSmall && (
+          <Text color="warning">
+            {cellsBox.columns === WIDTH / 2 ? 'Half size: the letters break up.' : 'Too small for a clear picture.'} Full
+            size needs the pane {WIDTH + SIDE_COLUMNS}×{FULL_ROWS + 1} (now {columns}×{bodyRows}): a smaller terminal font
+            or a bigger pane, then Fit.
           </Text>
         )}
         {!isPlaying && current.romPath === '' && (
           <Text dimColor>Type /pocket and the path of your own game file, for example /pocket ~/Games/my-game.gb</Text>
         )}
+      </Box>
+    )
+    const pad = isPlaying && Client !== undefined && (
+      <Client key="pad" module="./pad.tsx" props={{ isPaused: current.status === 'paused' }} height={1} />
+    )
+
+    if (isBeside && isPlaying) {
+      return (
+        <Box flexDirection="column">
+          <Box gap={2}>
+            {screen}
+            <Box flexDirection="column" gap={1} width={SIDE_COLUMNS - 2}>
+              {header}
+              {buttons}
+              {notes}
+            </Box>
+          </Box>
+          {pad}
+        </Box>
+      )
+    }
+    return (
+      <Box flexDirection="column">
+        {header}
+        {screen}
+        {pad}
+        {buttons}
+        {notes}
       </Box>
     )
   })
