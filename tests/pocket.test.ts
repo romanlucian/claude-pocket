@@ -99,6 +99,7 @@ describe('the screen', () => {
     const narrow = fit('cells', 80, 100)
     expect(narrow.columns).toBe(80)
     expect(narrow.rows).toBe(36)
+    expect(fit('cells', 120, 70)).toEqual({ columns: 80, rows: 36 })
     expect(fit('cells', 200, 30).rows).toBeLessThanOrEqual(30)
     expect(fit('pixels', 200, 100).columns).toBe(96)
 
@@ -132,8 +133,8 @@ describe('the mod', () => {
     expect(await ui.find({ type: 'Text', text: 'DEMO' })).toBeDefined()
     const screen = await ui.find({ key: 'screen' })
     expect(screen?.type).toBe('Raster')
-    expect(screen?.props.columns).toBe(120)
-    expect(await ui.find({ type: 'Text', text: /too small|small for a clear/ })).toBeUndefined()
+    expect(screen?.props.columns).toBe(80)
+    expect(await ui.find({ type: 'Text', text: /Half size/ })).toBeDefined()
 
     // The frame that arrived before the pane drew is painted by blit.
     expect(host.blits.length).toBeGreaterThan(0)

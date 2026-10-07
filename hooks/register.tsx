@@ -12,8 +12,6 @@ const PANE = 'pocket'
 const CHROME_ROWS = 6
 // Rows of cells the whole picture takes, two pixels to a cell.
 const FULL_ROWS = HEIGHT / 2
-// Below this width the picture is too small to play well: say how to grow it.
-const SMALL_COLUMNS = 80
 // Cells mode encodes every picture in this module: at most this many a second.
 const CELLS_FPS = 30
 
@@ -371,9 +369,11 @@ export const register: Register = (on, options) => {
           />
         </Box>
         {current.message !== '' && <Text dimColor>{current.message}</Text>}
-        {isPlaying && drawing === 'cells' && cellsBox.columns < SMALL_COLUMNS && (
-          <Text color="warning">
-            The pane is small for a clear picture: drag it taller (or make the font smaller, Cmd/Ctrl −), then press Fit.
+        {isPlaying && drawing === 'cells' && cellsBox.columns < WIDTH && (
+          <Text color={cellsBox.columns < WIDTH / 2 ? 'warning' : undefined} dimColor={cellsBox.columns >= WIDTH / 2}>
+            {cellsBox.columns === WIDTH / 2 ? 'Half size.' : 'The pane is small for a clear picture.'} Sharp full size needs{' '}
+            {WIDTH}×{FULL_ROWS + CHROME_ROWS} (the pane is {columns}×{e.props.scroll.bodyRows}): widen the pane or
+            make the font smaller (Cmd/Ctrl −), then press Fit.
           </Text>
         )}
         {!isPlaying && current.romPath === '' && (

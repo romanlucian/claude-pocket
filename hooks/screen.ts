@@ -33,6 +33,12 @@ export type Fit = { columns: number; rows: number }
  * a cell being about twice as tall as wide.
  */
 export function fit(mode: 'cells' | 'pixels', columns: number, rows: number): Fit {
+  // Cells: exactly full size, or exactly half, wherever they fit. Any other
+  // scale drops pixels unevenly and the game's letters break up.
+  if (mode === 'cells') {
+    if (columns >= WIDTH && rows >= HEIGHT / 2) return { columns: WIDTH, rows: HEIGHT / 2 }
+    if (columns >= WIDTH / 2 && rows >= HEIGHT / 4) return { columns: WIDTH / 2, rows: HEIGHT / 4 }
+  }
   const maxColumns = Math.max(16, Math.min(columns, mode === 'cells' ? WIDTH : 96))
   const maxRows = Math.max(8, rows)
   // rows a picture `c` columns wide needs: cells hold 2 pixels each.

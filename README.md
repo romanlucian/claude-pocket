@@ -47,8 +47,9 @@ last game; `/pocket stop` stops it.
 
 - **Ghostty or kitty:** the screen is drawn with real pixels (sharp).
 - **VS Code's terminal and others:** the screen is drawn with half-block
-  characters, two pixels per cell. The full picture needs 160 columns by 72
-  rows; half size (80 by 36) plays well. Give the terminal room: drag the
+  characters, two pixels per cell. The game is 160×144 pixels, so the sharp
+  picture needs the pane to be 160 columns by 78 rows; otherwise it is drawn at
+  exactly half size (80×36), never an in-between size that breaks up the letters. Give the terminal room: drag the
   terminal panel taller (or maximize it), and make the font smaller
   (Cmd/Ctrl −) for a sharper picture. After resizing, press **Fit** in the pane.
 
