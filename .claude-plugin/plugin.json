@@ -1,0 +1,20 @@
+{
+  "name": "pocket",
+  "version": "0.1.0",
+  "description": "A handheld game console in a Claude Code pane: plays your own Game Boy game files",
+  "author": {
+    "name": "Lucian Roman"
+  },
+  "license": "MIT",
+  "homepage": "https://github.com/romanlucian/claude-pocket",
+  "repository": "https://github.com/romanlucian/claude-pocket",
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "nodePath": {
+      "type": "string",
+      "title": "Node command",
+      "description": "How to run Node.js, which runs the emulator: `node`, or its full path when Claude Code cannot find it (run `which node` in a terminal to see it).",
+      "default": "node"
+    }
+  }
+}

@@ -1,0 +1,6 @@
+{
+  "name": "pocket",
+  "description": "The pocket mod: a handheld game console inside Claude Code",
+  "owner": { "name": "Lucian Roman" },
+  "plugins": [{ "name": "pocket", "source": "./" }]
+}
