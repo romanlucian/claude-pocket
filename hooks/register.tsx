@@ -2,7 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
 import type { PocketGame } from '../types'
-import { blank, expandPath, fit, toCells, unpack, HEIGHT, WIDTH } from './screen'
+import { expandPath, fit, HEIGHT, WIDTH } from './screen'
 import type { Fit } from './screen'
 
 type Engine = EngineInterface
@@ -10,13 +10,6 @@ type Engine = EngineInterface
 const PANE = 'pocket'
 // Rows the pane keeps for everything but the screen: title, pad, buttons, message.
 const CHROME_ROWS = 6
-// Rows of cells the whole picture takes, two pixels to a cell.
-const FULL_ROWS = HEIGHT / 2
-// Columns for the title and buttons when they stand beside the screen, which
-// leaves the screen every row but the pad's.
-const SIDE_COLUMNS = 30
-// Cells mode encodes every picture in this module: at most this many a second.
-const CELLS_FPS = 30
 
 const game = atom({ plugin: 'pocket', key: 'game' } as const, {
   status: 'idle',
@@ -26,7 +19,7 @@ const game = atom({ plugin: 'pocket', key: 'game' } as const, {
   firstFile: '',
   webUrl: '',
 })
-const mode = atom({ plugin: 'pocket', key: 'mode' } as const, 'cells')
+const mode = atom({ plugin: 'pocket', key: 'mode' } as const, 'window')
 const pauseWhenDone = atom({ plugin: 'pocket', key: 'pauseWhenDone' } as const, true)
 
 // How to run Node: the `nodePath` option, read again at every load.
@@ -36,20 +29,16 @@ let node = 'node'
 type Runner = {
   stop: () => void
   socket?: string
-  latestPx?: string
   latestFile?: string
   generation: number
   lastSeq: number
   isShowing: boolean
-  lastShownAt: number
 }
 let runner: Runner | undefined
-// The box the screen was last drawn in, per mode: what a blit must match.
-let cellsBox: Fit = fit('cells', 80, 40)
-let pixelsBox: Fit = fit('pixels', 80, 40)
-let latestShades: Uint8Array = blank()
+// The box the screen was last drawn in: what a blit must match.
+let pixelsBox: Fit = fit(80, 40)
 // Whether the last drawing mounted the screen as an Image: only then may a
-// blit swap its source (a blit to the Raster drawn before it is refused).
+// blit swap its source (one sent before it is drawn is refused).
 let isImageMounted = false
 
 async function setGame($: Engine, change: Partial<PocketGame>): Promise<void> {
@@ -88,56 +77,35 @@ async function setPaused($: Engine, isPaused: boolean, message: string): Promise
 // Paints the newest picture into the mounted screen, without a redraw.
 async function show($: Engine): Promise<void> {
   const current = runner
-  if (current === undefined || current.isShowing) return
+  if (current === undefined || current.isShowing || current.latestFile === undefined || !isImageMounted) return
   current.isShowing = true
   try {
-    const drawing = await read($, mode)
-    if (drawing === 'pixels' && current.latestFile !== undefined && isImageMounted) {
-      const done = await $.ui.blit({
-        requestId: PANE,
-        key: 'screen',
-        source: { file: current.latestFile, format: 'rgb', width: WIDTH, height: HEIGHT, generation: current.generation },
-      })
-      // The Image draws its alt here: this terminal shows no pictures, or
-      // cannot read the file. Any other refusal (a redraw in between) passes.
-      if (done.deny !== undefined && /\balt\b|placeholder|cannot read/i.test(done.deny)) {
-        await useCells($, done.deny)
-      }
-    } else if (drawing === 'cells' && current.latestPx !== undefined) {
-      const now = Date.now()
-      if (now - current.lastShownAt < 1000 / CELLS_FPS) return
-      current.lastShownAt = now
-      latestShades = unpack(current.latestPx)
-      current.latestPx = undefined
-      await $.ui.blit({
-        requestId: PANE,
-        key: 'screen',
-        cells: toCells(latestShades, cellsBox),
-        columns: cellsBox.columns,
-        rows: cellsBox.rows,
-      })
+    const done = await $.ui.blit({
+      requestId: PANE,
+      key: 'screen',
+      source: { file: current.latestFile, format: 'rgb', width: WIDTH, height: HEIGHT, generation: current.generation },
+    })
+    // The Image draws its alt here: this terminal shows no pictures, or
+    // cannot read the file. Any other refusal (a redraw in between) passes.
+    if (done.deny !== undefined && /\balt\b|placeholder|cannot read/i.test(done.deny)) {
+      await setMode($, 'window')
+      await setGame($, { message: `This terminal shows no pictures (${done.deny}), so the game plays in its own window.` })
+      await control($, '/open')
     }
   } finally {
     current.isShowing = false
   }
 }
 
-async function useCells($: Engine, why: string): Promise<void> {
-  await setMode($, 'cells')
-  await setGame($, { message: `Sharp pixels did not work here, so the screen uses cells: ${why}` })
-  $.ui.log(`pocket: drawing with cells, since this terminal shows no pictures here (${why})`, { to: 'debug' })
-}
-
-// Switches how the screen is drawn, for this game and the next ones.
-async function setMode($: Engine, drawing: 'pixels' | 'cells'): Promise<void> {
+// Switches where the game is drawn, for this game and the next ones:
+// `pixels` in the pane (Ghostty, kitty), `window` in its own window.
+async function setMode($: Engine, drawing: 'pixels' | 'window'): Promise<void> {
   await $.store.set('mode', drawing)
-  if (runner !== undefined) {
-    runner.latestFile = undefined
-    runner.latestPx = undefined
-  }
+  if (runner !== undefined) runner.latestFile = undefined
   await setGame($, { firstFile: '', message: '' })
   await update($, mode, () => drawing)
   await control($, '/mode', { image: drawing === 'pixels' })
+  if (drawing === 'window') await control($, '/open')
 }
 
 async function startGame($: Engine, romPath: string): Promise<void> {
@@ -149,7 +117,6 @@ async function startGame($: Engine, romPath: string): Promise<void> {
     generation: 0,
     lastSeq: 0,
     isShowing: false,
-    lastShownAt: 0,
   }
   runner = mine
   void pump($, stream, mine)
@@ -188,11 +155,10 @@ async function pump(
           const drawing = await read($, mode)
           if (drawing === 'pixels') await control($, '/mode', { image: true })
           await setGame($, { status: 'running', title, message: '', webUrl })
-          // No real pixels in this terminal: open the sharp screen too.
-          if (drawing === 'cells' && webUrl !== '') await control($, '/open')
+          if (drawing === 'window') await control($, '/open')
         }
         if (typeof message.paused === 'boolean') {
-          // The sharp screen's P key paused or resumed the game.
+          // The game window's P key paused or resumed the game.
           const isPaused = message.paused
           await update($, game, value =>
             value.status === 'running' || value.status === 'paused'
@@ -202,7 +168,6 @@ async function pump(
         }
         if (typeof message.frame === 'number') {
           mine.generation = message.frame
-          if (typeof message.px === 'string') mine.latestPx = message.px
           if (typeof message.file === 'string') {
             mine.latestFile = message.file
             const { value: current } = await $.state.get({ plugin: 'pocket', key: 'game' })
@@ -246,9 +211,7 @@ async function sendKeys($: Engine, data: unknown): Promise<void> {
 }
 
 async function openPane($: Engine): Promise<void> {
-  // Ask for room for the full picture: 160 columns by 72 rows of cells (two
-  // pixels a cell), plus the pane's own lines. The surface gives what it can.
-  await $.ui.open({ id: PANE, title: 'Pocket', rows: FULL_ROWS + CHROME_ROWS, columns: WIDTH + 2 })
+  await $.ui.open({ id: PANE, title: 'Pocket' })
 }
 
 async function remember($: Engine, romPath: string): Promise<void> {
@@ -258,7 +221,7 @@ async function remember($: Engine, romPath: string): Promise<void> {
 async function chooseMode($: Engine): Promise<void> {
   // The person's own choice (the Picture button) wins.
   const chosen = await $.store.get('mode')
-  if (chosen === 'pixels' || chosen === 'cells') {
+  if (chosen === 'pixels' || chosen === 'window') {
     await update($, mode, () => chosen)
     return
   }
@@ -267,7 +230,7 @@ async function chooseMode($: Engine): Promise<void> {
   const isKitty = (await $.env.get('KITTY_WINDOW_ID')) !== undefined
   const isGhostty = (await $.env.get('GHOSTTY_RESOURCES_DIR')) !== undefined
   const canDraw = isKitty || isGhostty || /kitty|ghostty/i.test(term) || /ghostty|kitty/i.test(program)
-  await update($, mode, () => (canDraw ? 'pixels' : 'cells'))
+  await update($, mode, () => (canDraw ? 'pixels' : 'window'))
 }
 
 async function play($: Engine, args: string): Promise<string> {
@@ -285,7 +248,9 @@ async function play($: Engine, args: string): Promise<string> {
   if (!(await $.fs.exists(romPath))) return `There is no file at ${romPath}.`
   await remember($, romPath)
   await startGame($, romPath)
-  return `Starting ${romPath}. Click the pad line in the Pocket pane to play.`
+  return (await read($, mode)) === 'window'
+    ? `Starting ${romPath} in its own window.`
+    : `Starting ${romPath}. Click the pad line in the Pocket pane to play.`
 }
 
 export const register: Register = (on, options) => {
@@ -336,7 +301,6 @@ export const register: Register = (on, options) => {
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const table = $.ui.resolve(e)
     const { Box, Text, Button } = table
-    const Raster = 'Raster' in table ? table.Raster : undefined
     const Image = 'Image' in table ? table.Image : undefined
     const Client = 'Client' in table ? table.Client : undefined
 
@@ -344,20 +308,14 @@ export const register: Register = (on, options) => {
     const drawing = await read($, mode)
     const isPausing = await read($, pauseWhenDone)
     const isPlaying = current.status === 'running' || current.status === 'paused'
-    const bodyRows = e.props.scroll.bodyRows
-    const freeRows = Math.max(10, bodyRows - CHROME_ROWS)
+    const inPane = isPlaying && drawing === 'pixels'
+    const freeRows = Math.max(10, e.props.scroll.bodyRows - CHROME_ROWS)
     const columns = Math.max(16, e.props.bodyColumns)
-    // Cells: put the controls beside the screen when that gives a bigger one.
-    const stacked = fit('cells', columns, freeRows)
-    const beside = fit('cells', columns - SIDE_COLUMNS, Math.max(10, bodyRows - 1))
-    const isBeside = drawing === 'cells' && beside.columns > stacked.columns
 
-    let screen
+    let screen = null
     isImageMounted = false
-    if (!isPlaying) {
-      screen = null
-    } else if (drawing === 'pixels' && Image !== undefined && current.firstFile !== '') {
-      pixelsBox = fit('pixels', columns, freeRows)
+    if (inPane && Image !== undefined && current.firstFile !== '') {
+      pixelsBox = fit(columns, freeRows)
       isImageMounted = true
       screen = (
         <Image
@@ -368,11 +326,6 @@ export const register: Register = (on, options) => {
           alt="The game screen"
         />
       )
-    } else if (Raster !== undefined) {
-      cellsBox = isBeside ? beside : stacked
-      screen = <Raster key="screen" columns={cellsBox.columns} rows={cellsBox.rows} cells={toCells(latestShades, cellsBox)} />
-    } else {
-      screen = <Text dimColor>The screen shows in a terminal: run Claude Code in Ghostty, kitty or VS Code's terminal.</Text>
     }
 
     const statusLine =
@@ -384,87 +337,52 @@ export const register: Register = (on, options) => {
             ? 'The console stopped.'
             : `${current.title}${current.status === 'paused' ? ' · paused' : ''}`
 
-    const isSmall = isPlaying && drawing === 'cells' && cellsBox.columns < WIDTH
-    const header = (
-      <Box gap={1} flexWrap="wrap">
-        <Text bold>{statusLine}</Text>
-        {isPlaying && <Text dimColor>{drawing === 'pixels' ? 'sharp pixels' : 'cell pixels'}</Text>}
-      </Box>
-    )
-    const buttons = (
-      <Box gap={isBeside ? 0 : 1} flexWrap="wrap" flexDirection={isBeside ? 'column' : 'row'}>
-        {isPlaying && (
-          <Button
-            key="pause"
-            label={current.status === 'paused' ? 'Resume' : 'Pause'}
-            onPress={() => void setPaused($, current.status !== 'paused', '')}
-          />
-        )}
-        {current.romPath !== '' && (
-          <Button key="restart" label={isPlaying ? 'Restart' : 'Play again'} onPress={() => void startGame($, current.romPath)} />
-        )}
-        {isPlaying && <Button key="stop" label="Stop" onPress={() => void stopGame($)} />}
-        {isPlaying && drawing === 'cells' && <Button key="fit" label="Fit" onPress={() => $.ui.invalidate('ui.render')} />}
-        {isPlaying && current.webUrl !== '' && (
-          <Button key="open" label="Open sharp screen" onPress={() => void control($, '/open')} />
-        )}
-        {isPlaying && current.webUrl !== '' && (
-          <Button key="copy" label="Copy link" onPress={press => void $.ui.copy({ text: current.webUrl, surface: press.surface })} />
-        )}
-        {isPlaying && (
-          <Button
-            key="picture"
-            label={drawing === 'pixels' ? 'Picture: sharp pixels' : 'Picture: cells'}
-            onPress={() => void setMode($, drawing === 'pixels' ? 'cells' : 'pixels')}
-          />
-        )}
-        <Button
-          key="auto-pause"
-          label={isPausing ? 'Pause when Claude finishes: on' : 'Pause when Claude finishes: off'}
-          onPress={() => void update($, pauseWhenDone, value => !value)}
-        />
-      </Box>
-    )
-    const notes = (
+    return (
       <Box flexDirection="column">
+        <Box gap={1}>
+          <Text bold>{statusLine}</Text>
+          {isPlaying && <Text dimColor>{inPane ? 'in this pane' : 'in its own window'}</Text>}
+        </Box>
+        {screen}
+        {inPane && Client !== undefined && (
+          <Client key="pad" module="./pad.tsx" props={{ isPaused: current.status === 'paused' }} height={1} />
+        )}
+        <Box gap={1} flexWrap="wrap">
+          {isPlaying && (
+            <Button
+              key="pause"
+              label={current.status === 'paused' ? 'Resume' : 'Pause'}
+              onPress={() => void setPaused($, current.status !== 'paused', '')}
+            />
+          )}
+          {current.romPath !== '' && (
+            <Button key="restart" label={isPlaying ? 'Restart' : 'Play again'} onPress={() => void startGame($, current.romPath)} />
+          )}
+          {isPlaying && <Button key="stop" label="Stop" onPress={() => void stopGame($)} />}
+          {isPlaying && !inPane && <Button key="open" label="Show game window" onPress={() => void control($, '/open')} />}
+          {isPlaying && (
+            <Button
+              key="picture"
+              label={inPane ? 'Play in a window' : 'Play in this pane'}
+              onPress={() => void setMode($, inPane ? 'window' : 'pixels')}
+            />
+          )}
+          <Button
+            key="auto-pause"
+            label={isPausing ? 'Pause when Claude finishes: on' : 'Pause when Claude finishes: off'}
+            onPress={() => void update($, pauseWhenDone, value => !value)}
+          />
+        </Box>
         {current.message !== '' && <Text dimColor>{current.message}</Text>}
-        {isPlaying && drawing === 'cells' && current.webUrl !== '' && (
-          <Text color={isSmall ? 'warning' : undefined} dimColor={!isSmall}>
-            This terminal draws blocks, not pixels. For the sharp picture, play in the sharp screen: Open sharp screen
-            (your browser), or Copy link and in VS Code run Simple Browser: Show and paste it.
+        {isPlaying && !inPane && (
+          <Text dimColor>
+            Play in the game window: ←↑→↓ move · Z = A · X = B · Enter = Start · Shift = Select · P = pause. Closed it? Show
+            game window.
           </Text>
         )}
         {!isPlaying && current.romPath === '' && (
           <Text dimColor>Type /pocket and the path of your own game file, for example /pocket ~/Games/my-game.gb</Text>
         )}
-      </Box>
-    )
-    const pad = isPlaying && Client !== undefined && (
-      <Client key="pad" module="./pad.tsx" props={{ isPaused: current.status === 'paused' }} height={1} />
-    )
-
-    if (isBeside && isPlaying) {
-      return (
-        <Box flexDirection="column">
-          <Box gap={2}>
-            {screen}
-            <Box flexDirection="column" gap={1} width={SIDE_COLUMNS - 2}>
-              {header}
-              {buttons}
-              {notes}
-            </Box>
-          </Box>
-          {pad}
-        </Box>
-      )
-    }
-    return (
-      <Box flexDirection="column">
-        {header}
-        {screen}
-        {pad}
-        {buttons}
-        {notes}
       </Box>
     )
   })

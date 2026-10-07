@@ -6,7 +6,7 @@ export type PocketGame = {
   message: string
   /** The picture file the terminal reads (pixels mode), once the first frame exists. */
   firstFile: string
-  /** The sharp screen's address (a page on 127.0.0.1), once the console is up. */
+  /** The game window's address (a page on 127.0.0.1), once the console is up. */
   webUrl: string
 }
 
@@ -14,8 +14,8 @@ declare module 'claude-code' {
   interface PluginState {
     pocket: {
       game: PocketGame
-      /** `pixels`: a real picture (Ghostty, kitty). `cells`: colored blocks, any terminal. */
-      mode: 'pixels' | 'cells'
+      /** `pixels`: a real picture in the pane (Ghostty, kitty). `window`: the game in its own window. */
+      mode: 'pixels' | 'window'
       /** Pause the game when Claude finishes a turn. */
       pauseWhenDone: boolean
     }

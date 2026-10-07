@@ -2,22 +2,22 @@
 // The emulator process the mod starts: `node pocket.mjs <game file>`.
 //
 // It runs the game in real time and talks to the mod through:
-// - stdout, one JSON line per message: first `{"ready":…}`, then one
-//   `{"frame":…}` per picture (the 160x144 shades packed 4 per byte, base64;
-//   in image mode the RGB file the terminal should read instead);
+// - stdout, one JSON line per message: first `{"ready":…}`, then, in image
+//   mode, one `{"frame":…}` per picture naming the RGB file the terminal
+//   reads;
 // - a tiny HTTP server on a Unix socket in a private temp folder, for keys
 //   (`POST /keys`), pause (`POST /pause`, `POST /resume`), the drawing
-//   mode (`POST /mode`) and opening the sharp screen (`POST /open`);
-// - the sharp screen, a web page on 127.0.0.1 (web.mjs): its address is in
+//   mode (`POST /mode`) and opening the game window (`POST /open`);
+// - the game window, a web page on 127.0.0.1 (web.mjs): its address is in
 //   the ready line, and a pause from it is a `{"paused":…}` line.
 //
 // A terminal reports key presses but not releases, so a press holds the
 // button for a moment and each repeat of a held key extends the hold.
 
 import { spawn } from 'node:child_process'
-import { mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:http'
-import { tmpdir } from 'node:os'
+import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 import { Machine, SHADES, WIDTH, HEIGHT } from '../core/machine.mjs'
@@ -50,8 +50,10 @@ let imageMode = false
 let imageSlot = 0
 let generation = 0
 const heldUntil = new Map()
-// Buttons the sharp screen holds down: a browser reports the release.
-const webDown = new Set()
+// Buttons the game window holds down, and since when: a browser reports
+// the release. The shortest press the game is sure to see: two frames.
+const webDown = new Map()
+const MIN_TAP_MS = 2 * FRAME_MS
 
 const cleanUp = () => {
   try {
@@ -85,22 +87,68 @@ function setPaused(next) {
 const web = await startWeb({
   title: machine.title,
   onButton: (button, isDown) => {
-    if (isDown) webDown.add(button)
-    else webDown.delete(button)
-    const until = heldUntil.get(button)
-    machine.setButton(button, isDown || (until !== undefined && until > performance.now()))
+    const now = performance.now()
+    if (isDown) {
+      webDown.set(button, now)
+      machine.setButton(button, true)
+      return
+    }
+    // A tap quicker than a frame or two would be missed: keep it down that long.
+    const downAt = webDown.get(button)
+    webDown.delete(button)
+    const release = () => {
+      if (webDown.has(button)) return
+      const until = heldUntil.get(button)
+      machine.setButton(button, until !== undefined && until > performance.now())
+    }
+    const heldFor = downAt === undefined ? Infinity : now - downAt
+    if (heldFor >= MIN_TAP_MS) release()
+    else setTimeout(release, MIN_TAP_MS - heldFor)
   },
   onPause: () => setPaused(!isPaused),
 })
 
-// Opens the sharp screen in the default browser.
-function openPage() {
-  const [command, ...args] =
-    process.platform === 'darwin' ? ['open', web.url] : process.platform === 'win32' ? ['cmd', '/c', 'start', '', web.url] : ['xdg-open', web.url]
-  try {
-    spawn(command, args, { stdio: 'ignore', detached: true }).on('error', () => {}).unref()
-  } catch {
-    // no browser to open: the address is in the pane
+// Browsers that open a page as a clean app window (`--app`): no tabs, no
+// address bar. Without one, the default browser opens it in a tab.
+const APP_BROWSERS = {
+  darwin: ['Google Chrome', 'Microsoft Edge', 'Brave Browser', 'Chromium', 'Arc'].flatMap(name => [
+    `/Applications/${name}.app`,
+    join(homedir(), 'Applications', `${name}.app`),
+  ]),
+  linux: ['google-chrome', 'google-chrome-stable', 'chromium', 'chromium-browser', 'microsoft-edge', 'brave-browser'],
+}
+// Four times the game's size, plus the window's own frame and the key line.
+const WINDOW_SIZE = `${WIDTH * 4 + 40},${HEIGHT * 4 + 120}`
+
+function launch(command, args) {
+  return new Promise(resolve => {
+    try {
+      const child = spawn(command, args, { stdio: 'ignore', detached: true })
+      child.on('error', () => resolve(false))
+      child.on('spawn', () => {
+        child.unref()
+        resolve(true)
+      })
+    } catch {
+      resolve(false)
+    }
+  })
+}
+
+// Opens the game window: an app window of a Chromium browser if there is
+// one, else the default browser.
+async function openPage() {
+  const appArgs = [`--app=${web.url}`, `--window-size=${WINDOW_SIZE}`]
+  if (process.platform === 'darwin') {
+    const app = APP_BROWSERS.darwin.find(path => existsSync(path))
+    if (app !== undefined && (await launch('open', ['-na', app, '--args', ...appArgs]))) return
+    await launch('open', [web.url])
+  } else if (process.platform === 'win32') {
+    if (await launch('cmd', ['/c', 'start', '', 'chrome', ...appArgs])) return
+    await launch('cmd', ['/c', 'start', '', web.url])
+  } else {
+    for (const browser of APP_BROWSERS.linux) if (await launch(browser, appArgs)) return
+    await launch('xdg-open', [web.url])
   }
 }
 
@@ -134,10 +182,7 @@ function emit(frame) {
     writeFileSync(`${file}.tmp`, rgb)
     renameSync(`${file}.tmp`, file)
     send({ frame: generation, file })
-    return
   }
-  pack(frame)
-  send({ frame: generation, px: Buffer.from(packed).toString('base64') })
 }
 
 const server = createServer((request, response) => {
@@ -158,7 +203,7 @@ const server = createServer((request, response) => {
     } else if (request.url === '/resume') {
       setPaused(false)
     } else if (request.url === '/open') {
-      openPage()
+      void openPage()
     } else if (request.url === '/mode') {
       imageMode = data.image === true
     }
@@ -194,7 +239,9 @@ const stop = () => {
   server.close()
   web.close()
   cleanUp()
-  process.exit(0)
+  // A moment for the game window to hear goodbye and close itself.
+  setTimeout(() => process.exit(0), 150).unref()
+  isPaused = true
 }
 process.on('SIGTERM', stop)
 process.on('SIGINT', stop)

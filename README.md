@@ -26,9 +26,23 @@ run `which node` in a terminal to see it).
 
 ## Play
 
-1. `/pocket ~/path/to/your-game.gb` — opens the Pocket pane and starts the game.
-2. Click the pad line (`▶ Click here to play`) under the screen so it has the keyboard.
-3. Play. **Esc** gives the keyboard back to Claude.
+```
+/pocket ~/path/to/your-game.gb
+```
+
+That's it. Where the game shows depends on your terminal:
+
+- **Ghostty or kitty:** right in the Pocket pane, with real pixels. Click the
+  pad line under the screen so it has the keyboard; **Esc** gives it back to
+  Claude.
+- **VS Code's terminal and the others:** a terminal like these can only draw
+  blocks of text, so the game opens in **its own window**, sharp at any size.
+  It is a clean app window when Chrome, Edge, Brave or Arc is installed (else
+  a browser tab). The pane keeps the controls. Closed the window? Press
+  **Show game window**.
+
+**Play in a window** / **Play in this pane** switches between the two (the
+choice is kept).
 
 | Key | Button |
 | --- | --- |
@@ -36,27 +50,16 @@ run `which node` in a terminal to see it).
 | Z | A |
 | X | B |
 | Enter | Start |
-| Space | Select |
+| Space (pane) / Shift (window) | Select |
 | P | Pause / resume |
 
-The pane also has buttons: Pause/Resume, Restart, Stop, and
-*Pause when Claude finishes* (on by default). `/pocket` with no file reopens the
-last game; `/pocket stop` stops it.
+The pane also has Pause/Resume, Restart, Stop and *Pause when Claude
+finishes* (on by default: when Claude finishes a turn, your game pauses).
+`/pocket` with no file reopens the last game; `/pocket stop` stops it.
 
-## Which terminal
-
-- **Ghostty or kitty:** the game is drawn with real pixels right in the pane,
-  and the title line says *sharp pixels*. The **Picture** button switches
-  between sharp pixels and cells; the choice is kept.
-- **VS Code's terminal and others:** a terminal like this can only draw
-  blocks of text, so Pocket also opens the **sharp screen**: the game in a
-  browser window, drawn with crisp pixels at any size. To keep it inside VS
-  Code, press **Copy link** in the pane, then run **Simple Browser: Show**
-  (Cmd/Ctrl+Shift+P) and paste it. **Open sharp screen** opens it again.
-
-The sharp screen is a page on your own computer only (127.0.0.1, with a
-secret address). Its keys are the same, except Select is **Shift**; a browser
-knows when you let go of a key, so the controls there feel exactly right.
+The game window is a page on your own computer only (127.0.0.1, at a secret
+address), and it closes when the game stops. A browser knows when you let go
+of a key, so the controls there feel exactly like the console's.
 
 ## What works, what doesn't
 
@@ -65,9 +68,9 @@ knows when you let go of a key, so the controls there feel exactly right.
   `dmg-acid2` reference picture.
 - **No sound.**
 - **No save files** yet (battery saves are lost when you stop).
-- In the terminal pane, keys are presses only (a terminal reports no
-  releases), so a key is held for a short moment after each press. The sharp
-  screen has real key releases.
+- In the pane, keys are presses only (a terminal reports no releases), so a
+  key is held for a short moment after each press. The game window has real
+  key releases.
 - Game Boy Color games are not supported.
 
 ## How it works
@@ -77,7 +80,7 @@ knows when you let go of a key, so the controls there feel exactly right.
   dependencies.
 - `runner/pocket.mjs` — runs the emulator in real time (~60 fps) in a Node
   process, streams frames on stdout and takes keys over a local socket.
-- `runner/web.mjs` — the sharp screen: a page on 127.0.0.1 drawing frames on
+- `runner/web.mjs` — the game window: a page on 127.0.0.1 drawing frames on
   a canvas.
 - `hooks/` — the mod: the `/pocket` command, the pane, the key pad, and the
   auto-pause when Claude finishes a turn.

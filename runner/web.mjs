@@ -1,4 +1,4 @@
-// The sharp screen: a small web page the emulator serves on this machine
+// The game window: a small web page the emulator serves on this machine
 // only (127.0.0.1), drawing each frame on a canvas with crisp pixels. A
 // browser reports key releases, so its keys press and release the buttons
 // exactly, unlike a terminal's.
@@ -67,7 +67,8 @@ export function startWeb({ title, onButton, onPause }) {
           broadcast('status', JSON.stringify(next))
         },
         close: () => {
-          for (const viewer of viewers) viewer.end()
+          // The console stopped: the page closes its window.
+          for (const viewer of viewers) viewer.end('event: bye\ndata: {}\n\n')
           server.close()
         },
       })
@@ -118,6 +119,9 @@ function fit() {
   canvas.style.height = H * scale + 'px'
 }
 addEventListener('resize', fit)
+// An app window opens at the size the browser picked: make it fit the game
+// at four times its size (a tab ignores this).
+if (window.outerWidth < W * 3) try { window.resizeTo(W * 4 + 40, H * 4 + 120) } catch {}
 fit()
 
 function say(text) {
@@ -138,7 +142,16 @@ events.addEventListener('frame', e => {
   ctx.putImageData(image, 0, 0)
 })
 events.addEventListener('status', e => say(JSON.parse(e.data).isPaused ? 'Paused · press P' : ''))
-events.onerror = () => say('The console stopped. Run /pocket again in Claude Code.')
+let isOver = false
+events.addEventListener('bye', () => {
+  isOver = true
+  events.close()
+  window.close()
+  say('The console stopped. You can close this window.')
+})
+events.onerror = () => {
+  if (!isOver) say('The console stopped. Run /pocket again in Claude Code.')
+}
 
 const KEYS = { ArrowUp: 'up', ArrowDown: 'down', ArrowLeft: 'left', ArrowRight: 'right', z: 'a', Z: 'a', x: 'b', X: 'b', Enter: 'start', Shift: 'select', Backspace: 'select' }
 const down = new Set()

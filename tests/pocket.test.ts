@@ -1,12 +1,14 @@
 import { describe, expect, mock, test } from 'claude-code/testing'
 import type { On } from 'claude-code'
 
-import { buttonFor, expandPath, fit, toCells, unpack, HEIGHT, SHADES, WIDTH } from '../hooks/screen'
+import { buttonFor, expandPath, fit } from '../hooks/screen'
 
 const HOME = '/home/test'
 const GAME = `${HOME}/Games/demo.gb`
 const SOCKET = '/tmp/pocket-test/s'
 const WEB = 'http://127.0.0.1:4567/?t=secret'
+const VSCODE = { HOME, TERM: 'xterm-256color', TERM_PROGRAM: 'vscode' }
+const GHOSTTY = { HOME, TERM: 'xterm-256color', GHOSTTY_RESOURCES_DIR: '/Applications/Ghostty.app' }
 
 const PANE = {
   plugin: 'pocket',
@@ -22,29 +24,17 @@ const PANE = {
   },
 } as const
 
-// A frame as the emulator packs it: shade = (x >> 3) & 3, stripes 8 px wide.
-function stripes(): string {
-  const bytes = new Uint8Array((WIDTH * HEIGHT) / 4)
-  for (let i = 0; i < bytes.length; i++) {
-    let b = 0
-    for (let k = 0; k < 4; k++) b |= ((((i * 4 + k) % WIDTH) >> 3) & 3) << (k * 2)
-    bytes[i] = b
-  }
-  return bytes.toBase64()
-}
-
-/** Stands in for Node running the emulator, the file system and the screen. */
-function fakeHost(on: On, env: Record<string, string> = { HOME, TERM: 'xterm-256color' }, frame: Record<string, unknown> = { px: stripes() }) {
+/**
+ * Stands in for Node running the emulator, the file system and the screen.
+ * The emulator says it is ready, then sends `lines` (a frame, a pause from
+ * the game window), then idles until `release`.
+ */
+function fakeHost(on: On, env: Record<string, string>, lines: Record<string, unknown>[] = []) {
   const posts: { path: string; body: unknown }[] = []
   const blits: Record<string, unknown>[] = []
   const spawned: string[][] = []
-  const opened: Record<string, unknown>[] = []
-  const copied: string[] = []
   let isRunning = true
   let isImageDrawn = false
-  const release = () => {
-    isRunning = false
-  }
 
   mock.env(on, env)
   mock.store(on)
@@ -56,7 +46,7 @@ function fakeHost(on: On, env: Record<string, string> = { HOME, TERM: 'xterm-256
       stream: 'stdout' as const,
       text: `${JSON.stringify({ ready: true, socket: SOCKET, web: WEB, title: 'DEMO', width: 160, height: 144 })}\n`,
     }
-    yield { stream: 'stdout' as const, text: `${JSON.stringify({ frame: 1, ...frame })}\n` }
+    for (const line of lines) yield { stream: 'stdout' as const, text: `${JSON.stringify(line)}\n` }
     // Idle on the mocked clock, as a stream with nothing new does: the kit's
     // acts settle around a wait on its clock, never around one of the test's.
     while (isRunning) await clock.sleep(1000)
@@ -69,27 +59,24 @@ function fakeHost(on: On, env: Record<string, string> = { HOME, TERM: 'xterm-256
   on('fs.exists', ($, e) => ({ value: e.path === GAME }))
   on('session.start', ($, e) => ({ cwd: e.cwd }))
   on('command.register', ($, e) => ({ value: { command: e.name } }))
-  on('ui.open', ($, e) => {
-    opened.push({ ...e })
-    return { value: { isPlaced: true as const } }
-  })
+  on('ui.open', () => ({ value: { isPlaced: true as const } }))
   on('ui.toast', () => ({ value: undefined }))
   on('ui.log', () => ({ value: undefined }))
-  on('ui.copy', ($, e) => {
-    copied.push(e.text)
-    return { value: { isCopied: true as const } }
-  })
   on('turn.complete', () => ({ text: 'done' }))
   on('ui.blit', ($, e) => {
     blits.push({ ...e })
     // As the engine answers a picture sent to a screen not yet drawn as one.
-    if ('source' in e && !isImageDrawn) return { value: { deny: 'pocket has no Image keyed screen mounted there (a Raster is)' } }
+    if (!isImageDrawn) return { value: { deny: 'pocket has no Image keyed screen mounted there' } }
     return { value: {} }
   })
+  const paths = () => posts.map(post => post.path)
+  const release = () => {
+    isRunning = false
+  }
   const drawImage = () => {
     isImageDrawn = true
   }
-  return { posts, blits, spawned, opened, copied, clock, release, drawImage }
+  return { posts, paths, blits, spawned, clock, release, drawImage }
 }
 
 const command = (args: string) => ({
@@ -101,24 +88,11 @@ const command = (args: string) => ({
 
 const start = { cwd: '/work', surface: 'terminal', isInteractive: true } as const
 
-describe('the screen', () => {
-  test('unpacks frames, fits the pane and draws half-block cells', () => {
-    const shades = unpack(stripes())
-    expect(shades.length).toBe(WIDTH * HEIGHT)
-    expect([shades[0], shades[8], shades[16], shades[24], shades[32]]).toEqual([0, 1, 2, 3, 0])
-
-    expect(fit('cells', 200, 100)).toEqual({ columns: 160, rows: 72 })
-    const narrow = fit('cells', 80, 100)
-    expect(narrow.columns).toBe(80)
-    expect(narrow.rows).toBe(36)
-    expect(fit('cells', 120, 70)).toEqual({ columns: 80, rows: 36 })
-    expect(fit('cells', 200, 30).rows).toBeLessThanOrEqual(30)
-    expect(fit('pixels', 200, 100).columns).toBe(96)
-
-    const words = new Uint32Array(Uint8Array.fromBase64(toCells(shades, { columns: 160, rows: 72 })).buffer)
-    expect(words.length).toBe(160 * 72 * 3)
-    expect([words[0], words[1], words[2]]).toEqual([0x2580, SHADES[0], SHADES[0]])
-    expect(words[8 * 3 + 1]).toBe(SHADES[1])
+describe('the helpers', () => {
+  test('fit the picture to the pane', () => {
+    expect(fit(200, 100)).toEqual({ columns: 96, rows: 44 })
+    expect(fit(200, 30).rows).toBeLessThanOrEqual(30)
+    expect(fit(40, 100).columns).toBe(40)
   })
 
   test('keys and paths', () => {
@@ -127,33 +101,60 @@ describe('the screen', () => {
   })
 })
 
+// While the emulator's stream is open, each act waits a moment for the
+// engine to go quiet, so these tests need more than the default 5 seconds.
 describe('the mod', () => {
-  // While the emulator's stream is open, each act waits a moment for the
-  // engine to go quiet, so this test needs more than the default 5 seconds.
-  test('plays a game: spawns the emulator, draws frames, sends keys', { timeoutMs: 20000 }, async ($, on) => {
-    const host = fakeHost(on)
+  test('in VS Code, plays in its own window', { timeoutMs: 20000 }, async ($, on) => {
+    const host = fakeHost(on, VSCODE, [{ paused: true }])
     await $.session.start(start)
 
     const answer = await $.command.run(command('~/Games/demo.gb'))
-    expect(answer.text).toContain('Starting')
+    expect(answer.text).toContain('in its own window')
     await host.clock.settle()
-    // The pane asks for room for the whole picture: 72 rows of cells and its own lines.
-    expect(host.opened[0]).toMatchObject({ id: 'pocket', rows: 78 })
     expect(host.spawned[0]?.slice(-2)).toEqual([expect.stringMatching(/runner\/pocket\.mjs$/), GAME])
+    // The game window opened, and the emulator draws no pictures for the pane.
+    expect(host.paths()).toContain('/open')
+    expect(host.paths()).not.toContain('/mode')
 
     const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
-    expect(await ui.find({ type: 'Text', text: 'DEMO' })).toBeDefined()
-    const screen = await ui.find({ key: 'screen' })
-    expect(screen?.type).toBe('Raster')
-    expect(screen?.props.columns).toBe(80)
-    // This terminal draws blocks: the sharp screen opened, and the pane offers it.
-    expect(host.posts.some(post => post.path === '/open')).toBe(true)
-    expect(await ui.find({ type: 'Text', text: /sharp screen/ })).toBeDefined()
-    await ui.press({ key: 'copy' })
-    expect(host.copied).toEqual([WEB])
+    expect(await ui.find({ type: 'Text', text: 'in its own window' })).toBeDefined()
+    expect(await ui.find({ key: 'screen' })).toBeUndefined()
+    expect(await ui.find({ key: 'pad' })).toBeUndefined()
 
-    // The frame that arrived before the pane drew is painted by blit.
-    expect(host.blits.length).toBeGreaterThan(0)
+    // The game window's P paused it: the pane says so, and Resume goes on.
+    expect(await ui.find({ type: 'Text', text: 'DEMO · paused' })).toBeDefined()
+    await ui.press({ key: 'pause' })
+    expect(host.paths()).toContain('/resume')
+    expect(await ui.find({ type: 'Text', text: 'DEMO' })).toBeDefined()
+
+    // Closed the window? Show it again.
+    const opens = host.paths().filter(path => path === '/open').length
+    await ui.press({ key: 'open' })
+    expect(host.paths().filter(path => path === '/open').length).toBe(opens + 1)
+
+    // The emulator quits on its own: the pane says so and offers to play again.
+    host.release()
+    await host.clock.advance(1000)
+    expect(await ui.find({ type: 'Text', text: 'The console stopped.' })).toBeDefined()
+    expect(await ui.find({ key: 'restart' })).toBeDefined()
+    await ui.unmount()
+  })
+
+  test('in Ghostty, plays in the pane with sharp pixels and pad keys', { timeoutMs: 20000 }, async ($, on) => {
+    const host = fakeHost(on, GHOSTTY, [{ frame: 1, file: '/tmp/pocket-test/frame0.rgb' }])
+    await $.session.start(start)
+    const missing = await $.command.run(command('~/nope.gb'))
+    expect(missing.text).toContain('There is no file')
+    await $.command.run(command(GAME))
+    await host.clock.settle()
+    expect(host.posts).toContainEqual({ path: '/mode', body: { image: true } })
+    expect(host.paths()).not.toContain('/open')
+
+    // A refusal while the screen is not yet a picture keeps the pane.
+    const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+    host.drawImage()
+    expect((await ui.find({ key: 'screen' }))?.type).toBe('Image')
+    expect(await ui.find({ type: 'Text', text: 'in this pane' })).toBeDefined()
 
     await ui.key({ key: 'right', in: 'pad' })
     await ui.key({ key: 'z', in: 'pad' })
@@ -162,75 +163,30 @@ describe('the mod', () => {
     expect(keys).toEqual(['right', 'a'])
 
     await ui.key({ key: 'p', in: 'pad' })
-    expect(host.posts.some(post => post.path === '/pause')).toBe(true)
-    expect(await ui.find({ type: 'Text', text: 'paused' })).toBeDefined()
-    await ui.press({ key: 'pause' })
-    expect(host.posts.some(post => post.path === '/resume')).toBe(true)
+    expect(host.paths()).toContain('/pause')
+    expect(await ui.find({ type: 'Text', text: 'DEMO · paused' })).toBeDefined()
 
-    // The emulator quits on its own: the pane says so and offers to play again.
-    host.release()
-    await host.clock.advance(1000)
-    expect(await ui.find({ type: 'Text', text: 'The console stopped.' })).toBeDefined()
+    // Play in a window instead: the choice opens it.
+    await ui.press({ key: 'picture' })
+    expect(host.posts).toContainEqual({ path: '/mode', body: { image: false } })
+    expect(host.paths()).toContain('/open')
     expect(await ui.find({ key: 'screen' })).toBeUndefined()
-    expect(await ui.find({ key: 'restart' })).toBeDefined()
-    await ui.unmount()
-  })
-
-  test('puts the buttons beside the screen when that makes it full size', { timeoutMs: 20000 }, async ($, on) => {
-    const host = fakeHost(on)
-    await $.session.start(start)
-    await $.command.run(command(GAME))
-    await host.clock.settle()
-    const props = { ...PANE.props, bodyColumns: 190, scroll: { offset: 0, bodyRows: 73 } }
-    const ui = await $.ui.mount({ ...PANE, props, surface: 'terminal' })
-    const screen = await ui.find({ key: 'screen' })
-    expect([screen?.props.columns, screen?.props.rows]).toEqual([160, 72])
-    expect(await ui.find({ key: 'fit' })).toBeDefined()
     host.release()
     await host.clock.advance(1000)
     await ui.unmount()
   })
 
-  test('pauses when Claude finishes a turn, not a subagent', async ($, on) => {
-    const host = fakeHost(on)
+  test('pauses when Claude finishes a turn, not a subagent', { timeoutMs: 20000 }, async ($, on) => {
+    const host = fakeHost(on, VSCODE)
     await $.session.start(start)
     await $.command.run(command(GAME))
     await host.clock.settle()
 
     await $.turn.complete({ answer: 'ok', durationMs: 5, isAborted: false, turnId: 't1', agentId: 'sub', reason: 'answer' })
-    expect(host.posts.some(post => post.path === '/pause')).toBe(false)
+    expect(host.paths()).not.toContain('/pause')
     await $.turn.complete({ answer: 'ok', durationMs: 5, isAborted: false, turnId: 't2', reason: 'answer' })
-    expect(host.posts.some(post => post.path === '/pause')).toBe(true)
+    expect(host.paths()).toContain('/pause')
     host.release()
     await host.clock.advance(1000)
   })
-
-  test('uses real pixels in Ghostty, and explains a missing file', { timeoutMs: 20000 }, async ($, on) => {
-    const host = fakeHost(on, { HOME, TERM: 'xterm-256color', GHOSTTY_RESOURCES_DIR: '/Applications/Ghostty.app' }, { file: '/tmp/pocket-test/frame0.rgb' })
-    await $.session.start(start)
-    const missing = await $.command.run(command('~/nope.gb'))
-    expect(missing.text).toContain('There is no file')
-    await $.command.run(command(GAME))
-    await host.clock.settle()
-    expect(host.posts.some(post => post.path === '/mode' && (post.body as { image: boolean }).image)).toBe(true)
-    // Sharp pixels here: no browser window opens by itself.
-    expect(host.posts.some(post => post.path === '/open')).toBe(false)
-
-    // A refusal while the screen is not yet a picture keeps sharp pixels.
-    const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
-    host.drawImage()
-    expect((await ui.find({ key: 'screen' }))?.type).toBe('Image')
-    expect(await ui.find({ type: 'Text', text: 'sharp pixels' })).toBeDefined()
-    expect(await ui.find({ key: 'picture' })).toBeDefined()
-    expect(host.posts.some(post => post.path === '/mode' && !(post.body as { image: boolean }).image)).toBe(false)
-
-    // The Picture button switches to cells.
-    await ui.press({ key: 'picture' })
-    expect(host.posts.some(post => post.path === '/mode' && !(post.body as { image: boolean }).image)).toBe(true)
-    expect(await ui.find({ type: 'Text', text: 'cell pixels' })).toBeDefined()
-    host.release()
-    await host.clock.advance(1000)
-    await ui.unmount()
-  })
-
 })
