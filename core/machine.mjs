@@ -1,7 +1,7 @@
-// The whole handheld: memory map, cartridge banking, timer, picture
-// processor, joypad, OAM DMA and the serial port. Sound registers are
-// kept (games read them back) but no sound is made.
+// The whole handheld: memory map, cartridge banking and battery RAM, timer,
+// picture processor, sound (apu.mjs), joypad, OAM DMA and the serial port.
 
+import { Apu } from './apu.mjs'
 import { Cpu } from './cpu.mjs'
 
 export const WIDTH = 160
@@ -34,7 +34,13 @@ class Cartridge {
       : -1
     if (this.mbc === -1) throw new Error(`cartridge type 0x${type.toString(16)} is not supported yet`)
     const ramSizes = [0, 0x800, 0x2000, 0x8000, 0x20000, 0x10000]
-    this.ram = new Uint8Array(Math.max(ramSizes[rom[0x149]] ?? 0, 0x2000))
+    // The RAM the cartridge really has: what a save file holds.
+    this.ramSize = ramSizes[rom[0x149]] ?? 0
+    this.ram = new Uint8Array(Math.max(this.ramSize, 0x2000))
+    // A battery keeps the RAM when the console is off: the game saves there.
+    this.hasBattery = [0x03, 0x09, 0x0f, 0x10, 0x13, 0x1b, 0x1e].includes(type) && this.ramSize > 0
+    // Set by every write to the RAM, cleared by whoever saves it.
+    this.isRamChanged = false
     this.romBanks = Math.max(2, rom.length >> 14)
     this.romBank = 1
     this.ramBank = 0
@@ -57,8 +63,9 @@ class Cartridge {
       bank %= this.romBanks
       return this.rom[bank * 0x4000 + (addr - 0x4000)] ?? 0xff
     }
-    // 0xA000-0xBFFF: cartridge RAM
+    // 0xA000-0xBFFF: cartridge RAM (an MBC3 clock register reads as 0)
     if (!this.ramEnabled && this.mbc !== 0) return 0xff
+    if (this.mbc === 3 && this.ramBank >= 8) return 0
     const bank = this.mbc === 1 && this.mode === 0 ? 0 : this.ramBank
     return this.ram[(bank * 0x2000 + (addr - 0xa000)) % this.ram.length]
   }
@@ -66,8 +73,13 @@ class Cartridge {
   write(addr, v) {
     if (addr >= 0xa000) {
       if (!this.ramEnabled && this.mbc !== 0) return
+      if (this.mbc === 3 && this.ramBank >= 8) return // the clock: not kept
       const bank = this.mbc === 1 && this.mode === 0 ? 0 : this.ramBank
-      this.ram[(bank * 0x2000 + (addr - 0xa000)) % this.ram.length] = v
+      const at = (bank * 0x2000 + (addr - 0xa000)) % this.ram.length
+      if (this.ram[at] !== v) {
+        this.ram[at] = v
+        this.isRamChanged = true
+      }
       return
     }
     if (this.mbc === 0) return
@@ -84,7 +96,7 @@ class Cartridge {
         this.romBank = (this.romBank & 0xff) | ((v & 1) << 8)
       }
     } else if (addr < 0x6000) {
-      this.ramBank = this.mbc === 5 ? v & 0x0f : v & 0x03
+      this.ramBank = this.mbc === 1 ? v & 0x03 : v & 0x0f
     } else if (this.mbc === 1) {
       this.mode = v & 1
     }
@@ -115,11 +127,29 @@ export class Machine {
     this.io[0x47] = 0xfc // BGP
     this.io[0x48] = 0xff
     this.io[0x49] = 0xff
-    this.io[0x26] = 0xf1 // NR52
+    this.apu = new Apu()
     this.cpu = new Cpu(this)
   }
 
   get title() { return this.cart.title }
+
+  // ---- Saves: the battery-backed cartridge RAM ----------------------------
+
+  /** Whether the game saves (battery-backed RAM). */
+  get hasSave() { return this.cart.hasBattery }
+
+  /** The save's bytes when they changed since the last call, else null. */
+  takeSave() {
+    if (!this.cart.hasBattery || !this.cart.isRamChanged) return null
+    this.cart.isRamChanged = false
+    return this.cart.ram.slice(0, this.cart.ramSize)
+  }
+
+  /** Puts back a save file's bytes (a shorter or longer file loads what fits). */
+  loadSave(bytes) {
+    this.cart.ram.set(bytes.subarray(0, this.cart.ramSize))
+    this.cart.isRamChanged = false
+  }
 
   // ---- The memory map ---------------------------------------------------
 
@@ -151,6 +181,7 @@ export class Machine {
   }
 
   readIo(r) {
+    if (r >= 0x10 && r < 0x40) return this.apu.read(r - 0x10)
     switch (r) {
       case 0x00: return this.readJoypad()
       case 0x04: return (this.divCounter >> 8) & 0xff
@@ -166,6 +197,10 @@ export class Machine {
   }
 
   writeIo(r, v) {
+    if (r >= 0x10 && r < 0x40) {
+      this.apu.write(r - 0x10, v)
+      return
+    }
     switch (r) {
       case 0x00: this.io[0] = v & 0x30; return
       case 0x02: // serial control: finish a transfer at once
@@ -230,6 +265,7 @@ export class Machine {
   tick(cycles) {
     this.tickTimer(cycles)
     this.tickPicture(cycles)
+    this.apu.tick(cycles)
   }
 
   tickTimer(cycles) {

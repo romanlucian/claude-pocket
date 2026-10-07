@@ -66,8 +66,16 @@ of a key, so the controls there feel exactly like the console's.
 - Game Boy (DMG) games with no mapper, MBC1, MBC3 or MBC5 cartridges.
 - Passes the blargg `cpu_instrs` and `instr_timing` tests and matches the
   `dmg-acid2` reference picture.
-- **No sound.**
-- **No save files** yet (battery saves are lost when you stop).
+- **Sound** in the game window: both square channels, the wave channel and
+  noise, in stereo. It starts with your first key press there (browsers
+  wait for one); **M** turns it off and on. The pane in Ghostty or kitty is
+  silent: a terminal plays no sound. Passes 9 of blargg's 12 `dmg_sound`
+  tests (the three left are about reading the wave memory mid-note).
+- **Saves:** a game that saves (a battery in the cartridge, like Pokémon or
+  Zelda) keeps its save in `your-game.sav` beside the game file, the same
+  file other emulators use, so you can bring your saves along. It is written
+  a second after the game saves and when you stop. The pane says when a save
+  was loaded. (An MBC3 cartridge's clock is not kept.)
 - In the pane, keys are presses only (a terminal reports no releases), so a
   key is held for a short moment after each press. The game window has real
   key releases.
@@ -75,13 +83,13 @@ of a key, so the controls there feel exactly like the console's.
 
 ## How it works
 
-- `core/` — the emulator: CPU (`cpu.mjs`) and the rest of the machine:
-  cartridge, timer, picture, joypad (`machine.mjs`). Plain JavaScript, no
-  dependencies.
+- `core/` — the emulator: CPU (`cpu.mjs`), sound (`apu.mjs`) and the rest
+  of the machine: cartridge and saves, timer, picture, joypad
+  (`machine.mjs`). Plain JavaScript, no dependencies.
 - `runner/pocket.mjs` — runs the emulator in real time (~60 fps) in a Node
   process, streams frames on stdout and takes keys over a local socket.
 - `runner/web.mjs` — the game window: a page on 127.0.0.1 drawing frames on
-  a canvas.
+  a canvas and playing the sound.
 - `hooks/` — the mod: the `/pocket` command, the pane, the key pad, and the
   auto-pause when Claude finishes a turn.
 

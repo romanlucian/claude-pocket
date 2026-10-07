@@ -148,13 +148,18 @@ async function pump(
           continue
         }
         if (typeof message.error === 'string') failure = message.error
+        if (typeof message.warning === 'string') await setGame($, { message: message.warning })
         if (message.ready === true && typeof message.socket === 'string') {
           mine.socket = message.socket
           const title = typeof message.title === 'string' && message.title !== '' ? message.title : 'Game'
           const webUrl = typeof message.web === 'string' ? message.web : ''
           const drawing = await read($, mode)
           if (drawing === 'pixels') await control($, '/mode', { image: true })
-          await setGame($, { status: 'running', title, message: '', webUrl })
+          // Where the game saves, if it does: a `.sav` beside the game file.
+          const save = typeof message.save === 'string' ? message.save : ''
+          const saveNote =
+            save === '' ? '' : message.isSaveLoaded === true ? `Save loaded from ${save}.` : `The game saves to ${save}.`
+          await setGame($, { status: 'running', title, message: saveNote, webUrl })
           if (drawing === 'window') await control($, '/open')
         }
         if (typeof message.paused === 'boolean') {
@@ -162,7 +167,7 @@ async function pump(
           const isPaused = message.paused
           await update($, game, value =>
             value.status === 'running' || value.status === 'paused'
-              ? { ...value, status: isPaused ? ('paused' as const) : ('running' as const), message: '' }
+              ? { ...value, status: isPaused ? ('paused' as const) : ('running' as const), message: isPaused ? value.message : '' }
               : value,
           )
         }
@@ -376,8 +381,8 @@ export const register: Register = (on, options) => {
         {current.message !== '' && <Text dimColor>{current.message}</Text>}
         {isPlaying && !inPane && (
           <Text dimColor>
-            Play in the game window: ←↑→↓ move · Z = A · X = B · Enter = Start · Shift = Select · P = pause. Closed it? Show
-            game window.
+            Play in the game window: ←↑→↓ move · Z = A · X = B · Enter = Start · Shift = Select · P = pause · M = sound on/off.
+            Closed it? Show game window.
           </Text>
         )}
         {!isPlaying && current.romPath === '' && (

@@ -44,7 +44,7 @@ function fakeHost(on: On, env: Record<string, string>, lines: Record<string, unk
     spawned.push([...e.argv])
     yield {
       stream: 'stdout' as const,
-      text: `${JSON.stringify({ ready: true, socket: SOCKET, web: WEB, title: 'DEMO', width: 160, height: 144 })}\n`,
+      text: `${JSON.stringify({ ready: true, socket: SOCKET, web: WEB, title: 'DEMO', width: 160, height: 144, save: `${HOME}/Games/demo.sav`, isSaveLoaded: true })}\n`,
     }
     for (const line of lines) yield { stream: 'stdout' as const, text: `${JSON.stringify(line)}\n` }
     // Idle on the mocked clock, as a stream with nothing new does: the kit's
@@ -118,6 +118,7 @@ describe('the mod', () => {
 
     const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
     expect(await ui.find({ type: 'Text', text: 'in its own window' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: `Save loaded from ${HOME}/Games/demo.sav.` })).toBeDefined()
     expect(await ui.find({ key: 'screen' })).toBeUndefined()
     expect(await ui.find({ key: 'pad' })).toBeUndefined()
 

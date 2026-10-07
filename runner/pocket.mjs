@@ -11,6 +11,10 @@
 // - the game window, a web page on 127.0.0.1 (web.mjs): its address is in
 //   the ready line, and a pause from it is a `{"paused":…}` line.
 //
+// A game that saves (battery RAM) keeps its save in `<game>.sav` beside the
+// game file, the name other emulators use: read at the start, written a
+// second after the game changes it, and when the console stops.
+//
 // A terminal reports key presses but not releases, so a press holds the
 // button for a moment and each repeat of a held key extends the hold.
 
@@ -41,6 +45,32 @@ try {
 } catch (error) {
   send({ error: `Could not load ${romPath}: ${error.message}` })
   process.exit(2)
+}
+
+const savePath = machine.hasSave ? romPath.replace(/\.(gb|gbc|dmg)$/i, '') + '.sav' : null
+let isSaveLoaded = false
+if (savePath !== null && existsSync(savePath)) {
+  try {
+    machine.loadSave(new Uint8Array(readFileSync(savePath)))
+    isSaveLoaded = true
+  } catch (error) {
+    send({ warning: `Could not read the save ${savePath}: ${error.message}` })
+  }
+}
+let isSaveWarned = false
+
+// Writes the save if the game changed it: whole, then named, so a crash
+// never leaves half a save.
+function writeSave() {
+  const bytes = machine.takeSave()
+  if (bytes === null || savePath === null) return
+  try {
+    writeFileSync(`${savePath}.tmp`, bytes)
+    renameSync(`${savePath}.tmp`, savePath)
+  } catch (error) {
+    if (!isSaveWarned) send({ warning: `Could not write the save ${savePath}: ${error.message}` })
+    isSaveWarned = true
+  }
 }
 
 const dir = mkdtempSync(join(tmpdir(), 'pocket-'))
@@ -211,11 +241,14 @@ const server = createServer((request, response) => {
   })
 })
 
-server.listen(socket, () => send({ ready: true, socket, web: web.url, title: machine.title, width: WIDTH, height: HEIGHT }))
+server.listen(socket, () =>
+  send({ ready: true, socket, web: web.url, title: machine.title, width: WIDTH, height: HEIGHT, save: savePath, isSaveLoaded }),
+)
 
 // Real time: run as many frames as the clock says are due (at most a few,
 // so a stall does not fast-forward), and send only the newest picture.
 let due = performance.now()
+let framesSinceSave = 0
 function loop() {
   const now = performance.now()
   if (isPaused) {
@@ -230,12 +263,22 @@ function loop() {
     }
     if (due < now) due = now
     if (frames > 0) emit(machine.frame)
+    // The sound of those frames, for the game window (always taken, so it
+    // never piles up).
+    const sound = machine.apu.take()
+    if (sound.length > 0 && web.hasViewers()) web.sound(sound)
+    framesSinceSave += frames
+    if (framesSinceSave >= 60) {
+      framesSinceSave = 0
+      writeSave()
+    }
   }
   setTimeout(loop, Math.max(1, due - performance.now()))
 }
 loop()
 
 const stop = () => {
+  writeSave()
   server.close()
   web.close()
   cleanUp()

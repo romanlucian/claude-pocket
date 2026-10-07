@@ -10,6 +10,7 @@
 import { randomBytes } from 'node:crypto'
 import { createServer } from 'node:http'
 
+import { SAMPLE_RATE } from '../core/apu.mjs'
 import { SHADES, WIDTH, HEIGHT } from '../core/machine.mjs'
 
 const BUTTONS = new Set(['up', 'down', 'left', 'right', 'a', 'b', 'start', 'select'])
@@ -62,6 +63,8 @@ export function startWeb({ title, onButton, onPause }) {
         url: `http://127.0.0.1:${server.address().port}/?t=${token}`,
         hasViewers: () => viewers.size > 0,
         frame: packed => broadcast('frame', Buffer.from(packed).toString('base64')),
+        // 16-bit stereo samples at SAMPLE_RATE, little-endian.
+        sound: samples => broadcast('sound', Buffer.from(samples.buffer, samples.byteOffset, samples.byteLength).toString('base64')),
         status: next => {
           lastStatus = next
           broadcast('status', JSON.stringify(next))
@@ -101,11 +104,11 @@ function page(title, token) {
 </head>
 <body>
 <div id="frame"><canvas id="screen" width="${WIDTH}" height="${HEIGHT}"></canvas><div id="note"></div></div>
-<div id="keys"><kbd>←↑→↓</kbd> move · <kbd>Z</kbd> A (jump) · <kbd>X</kbd> B · <kbd>Enter</kbd> Start · <kbd>Shift</kbd> Select · <kbd>P</kbd> pause</div>
+<div id="keys"><kbd>←↑→↓</kbd> move · <kbd>Z</kbd> A (jump) · <kbd>X</kbd> B · <kbd>Enter</kbd> Start · <kbd>Shift</kbd> Select · <kbd>P</kbd> pause · <kbd>M</kbd> <span id="sound">sound: press a key</span></div>
 <script>
 const T = ${JSON.stringify(token)}
 const SHADES = ${JSON.stringify(shades)}
-const W = ${WIDTH}, H = ${HEIGHT}
+const W = ${WIDTH}, H = ${HEIGHT}, RATE = ${SAMPLE_RATE}
 const canvas = document.getElementById('screen')
 const note = document.getElementById('note')
 const ctx = canvas.getContext('2d')
@@ -153,6 +156,52 @@ events.onerror = () => {
   if (!isOver) say('The console stopped. Run /pocket again in Claude Code.')
 }
 
+// Sound: the browser lets a page play only after a key or a click, so it
+// starts with the first one. Each chunk is queued just behind the last,
+// a little ahead of now; a queue grown too long (a hiccup) drops a chunk.
+let audio = null
+let isMuted = false
+let playAt = 0
+let drops = 0
+const soundLabel = document.getElementById('sound')
+function startSound() {
+  if (audio !== null) return
+  try {
+    audio = new AudioContext({ sampleRate: RATE, latencyHint: 'interactive' })
+  } catch {
+    audio = new AudioContext()
+  }
+  audio.resume()
+  soundLabel.textContent = 'sound on'
+}
+events.addEventListener('sound', e => {
+  if (audio === null || isMuted || audio.state !== 'running') return
+  const bytes = Uint8Array.from(atob(e.data), c => c.charCodeAt(0))
+  const samples = new Int16Array(bytes.buffer)
+  const frames = samples.length / 2
+  if (frames === 0) return
+  const buffer = audio.createBuffer(2, frames, RATE)
+  const left = buffer.getChannelData(0), right = buffer.getChannelData(1)
+  for (let i = 0; i < frames; i++) {
+    left[i] = samples[i * 2] / 32768
+    right[i] = samples[i * 2 + 1] / 32768
+  }
+  const now = audio.currentTime
+  if (playAt < now + 0.02) playAt = now + 0.05
+  if (playAt > now + 0.12) { drops++; return }
+  const source = audio.createBufferSource()
+  source.buffer = buffer
+  source.connect(audio.destination)
+  source.start(playAt)
+  playAt += buffer.duration
+})
+function toggleMute() {
+  startSound()
+  isMuted = !isMuted
+  soundLabel.textContent = isMuted ? 'sound off' : 'sound on'
+}
+addEventListener('pointerdown', startSound)
+
 const KEYS = { ArrowUp: 'up', ArrowDown: 'down', ArrowLeft: 'left', ArrowRight: 'right', z: 'a', Z: 'a', x: 'b', X: 'b', Enter: 'start', Shift: 'select', Backspace: 'select' }
 const down = new Set()
 const post = path => fetch(path + (path.includes('?') ? '&' : '?') + 't=' + T, { method: 'POST' }).catch(() => {})
@@ -162,6 +211,8 @@ function setButton(button, isDown) {
   post('/button?b=' + button + '&down=' + (isDown ? 1 : 0))
 }
 addEventListener('keydown', e => {
+  if (e.key === 'm' || e.key === 'M') { if (!e.repeat) toggleMute(); e.preventDefault(); return }
+  startSound()
   if (e.key === 'p' || e.key === 'P') { if (!e.repeat) post('/pause'); e.preventDefault(); return }
   const button = KEYS[e.key]
   if (button) { setButton(button, true); e.preventDefault() }
