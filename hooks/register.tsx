@@ -47,6 +47,9 @@ let runner: Runner | undefined
 let cellsBox: Fit = fit('cells', 80, 40)
 let pixelsBox: Fit = fit('pixels', 80, 40)
 let latestShades: Uint8Array = blank()
+// Whether the last drawing mounted the screen as an Image: only then may a
+// blit swap its source (a blit to the Raster drawn before it is refused).
+let isImageMounted = false
 
 async function setGame($: Engine, change: Partial<PocketGame>): Promise<void> {
   await update($, game, current => ({ ...current, ...change }))
@@ -88,14 +91,15 @@ async function show($: Engine): Promise<void> {
   current.isShowing = true
   try {
     const drawing = await read($, mode)
-    if (drawing === 'pixels' && current.latestFile !== undefined) {
+    if (drawing === 'pixels' && current.latestFile !== undefined && isImageMounted) {
       const done = await $.ui.blit({
         requestId: PANE,
         key: 'screen',
         source: { file: current.latestFile, format: 'rgb', width: WIDTH, height: HEIGHT, generation: current.generation },
       })
-      // This terminal shows no pictures (or cannot read the file): use cells.
-      if (done.deny !== undefined && /alt|read|picture|image/i.test(done.deny)) {
+      // The Image draws its alt here: this terminal shows no pictures, or
+      // cannot read the file. Any other refusal (a redraw in between) passes.
+      if (done.deny !== undefined && /\balt\b|placeholder|cannot read/i.test(done.deny)) {
         await useCells($, done.deny)
       }
     } else if (drawing === 'cells' && current.latestPx !== undefined) {
@@ -118,9 +122,21 @@ async function show($: Engine): Promise<void> {
 }
 
 async function useCells($: Engine, why: string): Promise<void> {
-  await update($, mode, () => 'cells')
-  await control($, '/mode', { image: false })
+  await setMode($, 'cells')
+  await setGame($, { message: `Sharp pixels did not work here, so the screen uses cells: ${why}` })
   $.ui.log(`pocket: drawing with cells, since this terminal shows no pictures here (${why})`, { to: 'debug' })
+}
+
+// Switches how the screen is drawn, for this game and the next ones.
+async function setMode($: Engine, drawing: 'pixels' | 'cells'): Promise<void> {
+  await $.store.set('mode', drawing)
+  if (runner !== undefined) {
+    runner.latestFile = undefined
+    runner.latestPx = undefined
+  }
+  await setGame($, { firstFile: '', message: '' })
+  await update($, mode, () => drawing)
+  await control($, '/mode', { image: drawing === 'pixels' })
 }
 
 async function startGame($: Engine, romPath: string): Promise<void> {
@@ -226,10 +242,17 @@ async function remember($: Engine, romPath: string): Promise<void> {
 }
 
 async function chooseMode($: Engine): Promise<void> {
+  // The person's own choice (the Picture button) wins.
+  const chosen = await $.store.get('mode')
+  if (chosen === 'pixels' || chosen === 'cells') {
+    await update($, mode, () => chosen)
+    return
+  }
   const term = (await $.env.get('TERM')) ?? ''
   const program = (await $.env.get('TERM_PROGRAM')) ?? ''
   const isKitty = (await $.env.get('KITTY_WINDOW_ID')) !== undefined
-  const canDraw = isKitty || /kitty|ghostty/i.test(term) || /ghostty/i.test(program)
+  const isGhostty = (await $.env.get('GHOSTTY_RESOURCES_DIR')) !== undefined
+  const canDraw = isKitty || isGhostty || /kitty|ghostty/i.test(term) || /ghostty|kitty/i.test(program)
   await update($, mode, () => (canDraw ? 'pixels' : 'cells'))
 }
 
@@ -316,10 +339,12 @@ export const register: Register = (on, options) => {
     const isBeside = drawing === 'cells' && beside.columns > stacked.columns
 
     let screen
+    isImageMounted = false
     if (!isPlaying) {
       screen = null
     } else if (drawing === 'pixels' && Image !== undefined && current.firstFile !== '') {
       pixelsBox = fit('pixels', columns, freeRows)
+      isImageMounted = true
       screen = (
         <Image
           key="screen"
@@ -366,6 +391,13 @@ export const register: Register = (on, options) => {
         )}
         {isPlaying && <Button key="stop" label="Stop" onPress={() => void stopGame($)} />}
         {isPlaying && drawing === 'cells' && <Button key="fit" label="Fit" onPress={() => $.ui.invalidate('ui.render')} />}
+        {isPlaying && (
+          <Button
+            key="picture"
+            label={drawing === 'pixels' ? 'Picture: sharp pixels' : 'Picture: cells'}
+            onPress={() => void setMode($, drawing === 'pixels' ? 'cells' : 'pixels')}
+          />
+        )}
         <Button
           key="auto-pause"
           label={isPausing ? 'Pause when Claude finishes: on' : 'Pause when Claude finishes: off'}

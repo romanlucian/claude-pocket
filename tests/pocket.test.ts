@@ -33,12 +33,13 @@ function stripes(): string {
 }
 
 /** Stands in for Node running the emulator, the file system and the screen. */
-function fakeHost(on: On, env: Record<string, string> = { HOME, TERM: 'xterm-256color' }) {
+function fakeHost(on: On, env: Record<string, string> = { HOME, TERM: 'xterm-256color' }, frame: Record<string, unknown> = { px: stripes() }) {
   const posts: { path: string; body: unknown }[] = []
   const blits: Record<string, unknown>[] = []
   const spawned: string[][] = []
   const opened: Record<string, unknown>[] = []
   let isRunning = true
+  let isImageDrawn = false
   const release = () => {
     isRunning = false
   }
@@ -53,7 +54,7 @@ function fakeHost(on: On, env: Record<string, string> = { HOME, TERM: 'xterm-256
       stream: 'stdout' as const,
       text: `${JSON.stringify({ ready: true, socket: SOCKET, title: 'DEMO', width: 160, height: 144 })}\n`,
     }
-    yield { stream: 'stdout' as const, text: `${JSON.stringify({ frame: 1, px: stripes() })}\n` }
+    yield { stream: 'stdout' as const, text: `${JSON.stringify({ frame: 1, ...frame })}\n` }
     // Idle on the mocked clock, as a stream with nothing new does: the kit's
     // acts settle around a wait on its clock, never around one of the test's.
     while (isRunning) await clock.sleep(1000)
@@ -75,9 +76,14 @@ function fakeHost(on: On, env: Record<string, string> = { HOME, TERM: 'xterm-256
   on('turn.complete', () => ({ text: 'done' }))
   on('ui.blit', ($, e) => {
     blits.push({ ...e })
+    // As the engine answers a picture sent to a screen not yet drawn as one.
+    if ('source' in e && !isImageDrawn) return { value: { deny: 'pocket has no Image keyed screen mounted there (a Raster is)' } }
     return { value: {} }
   })
-  return { posts, blits, spawned, opened, clock, release }
+  const drawImage = () => {
+    isImageDrawn = true
+  }
+  return { posts, blits, spawned, opened, clock, release, drawImage }
 }
 
 const command = (args: string) => ({
@@ -191,15 +197,30 @@ describe('the mod', () => {
     await host.clock.advance(1000)
   })
 
-  test('uses real pixels in Ghostty, and explains a missing file', async ($, on) => {
-    const host = fakeHost(on, { HOME, TERM: 'xterm-ghostty' })
+  test('uses real pixels in Ghostty, and explains a missing file', { timeoutMs: 20000 }, async ($, on) => {
+    const host = fakeHost(on, { HOME, TERM: 'xterm-256color', GHOSTTY_RESOURCES_DIR: '/Applications/Ghostty.app' }, { file: '/tmp/pocket-test/frame0.rgb' })
     await $.session.start(start)
     const missing = await $.command.run(command('~/nope.gb'))
     expect(missing.text).toContain('There is no file')
     await $.command.run(command(GAME))
     await host.clock.settle()
     expect(host.posts.some(post => post.path === '/mode' && (post.body as { image: boolean }).image)).toBe(true)
+
+    // A refusal while the screen is not yet a picture keeps sharp pixels.
+    const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+    host.drawImage()
+    expect((await ui.find({ key: 'screen' }))?.type).toBe('Image')
+    expect(await ui.find({ type: 'Text', text: 'sharp pixels' })).toBeDefined()
+    expect(await ui.find({ key: 'picture' })).toBeDefined()
+    expect(host.posts.some(post => post.path === '/mode' && !(post.body as { image: boolean }).image)).toBe(false)
+
+    // The Picture button switches to cells.
+    await ui.press({ key: 'picture' })
+    expect(host.posts.some(post => post.path === '/mode' && !(post.body as { image: boolean }).image)).toBe(true)
+    expect(await ui.find({ type: 'Text', text: 'cell pixels' })).toBeDefined()
     host.release()
     await host.clock.advance(1000)
+    await ui.unmount()
   })
+
 })

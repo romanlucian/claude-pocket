@@ -45,7 +45,10 @@ last game; `/pocket stop` stops it.
 
 ## Which terminal
 
-- **Ghostty or kitty:** the screen is drawn with real pixels (sharp).
+- **Ghostty or kitty:** the screen is drawn with real pixels (sharp), and the
+  title line says *sharp pixels*. The **Picture** button switches between
+  sharp pixels and cells; the choice is kept. If sharp pixels don't work, the
+  pane says why and uses cells.
 - **VS Code's terminal and others:** the screen is drawn with half-block
   characters, one game pixel per half character. The game is 160×144 pixels,
   and its letters are only readable at full size: the pane must be about
